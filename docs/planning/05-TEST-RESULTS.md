@@ -10,7 +10,7 @@ The user requested implementation starting with Drawn to Scale and selected Nego
 |---|---|---|
 | Implementation test suite | **34 passed**, one dependency deprecation warning; exit 0 | Synthetic geometry and mocked-provider transport, upload → correction → export, access control, stale revisions, restart recovery, bounded retries, empty coverage and busy-worker behavior. No real model calls. |
 | Local service startup | **Passed**, health and OpenAPI responses returned successfully | Service started on loopback, served nine documented route paths, and was shut down. Health correctly reported that the Meta key is not configured. |
-| Negombo geographic retrieval | **259 named features** in the provisional central area | One real read-only Overpass retrieval. [Area config](../evals/areas/negombo-central.json); local candidate snapshot/manifest at `private/negombo-coverage.json`. Source: [OpenStreetMap](https://www.openstreetmap.org/node/2064194449), [attribution/licence](https://www.openstreetmap.org/copyright). Feature count is not proof of correct matches or complete coverage. |
+| Negombo geographic retrieval | **259 named features** in the provisional central area | One real read-only Overpass retrieval. [Area config](../../evals/areas/negombo-central.json); local candidate snapshot/manifest at `private/negombo-coverage.json`. Source: [OpenStreetMap](https://www.openstreetmap.org/node/2064194449), [attribution/licence](https://www.openstreetmap.org/copyright). Feature count is not proof of correct matches or complete coverage. |
 | Real Meta extraction/matching | **NOT RUN** | No owned sketch or locally configured key has been supplied. |
 | Full five-sketch gate | **NOT TESTED** | No extraction precision/recall, independently checked geographic error or manual-versus-assisted time has been measured. |
 
@@ -32,10 +32,10 @@ In the earlier probes, correspondences were supplied; they did not test real ske
 
 The hand-authored `fixture.synthetic.json` is validator input, not a captured model response. The local checks are small engineering probes, not benchmark results or evidence of adoption, time saved, field safety or winning odds.
 
-Reproduce with `python spike/check_core.py` and `python spike/check_probe.py` from this project folder. Saved machine-readable output: [results/local-checks.json](../spike/results/local-checks.json). These scripts and reports may be published only under the eventual project/data rules; they do not constitute a submitted product.
+Reproduce with `python evals/probes/check_core.py` and `python evals/probes/check_probe.py` from this project folder. Saved machine-readable output: [results/local-checks.json](../../evals/probes/results/local-checks.json). These scripts and reports may be published only under the eventual project/data rules; they do not constitute a submitted product.
 
 ## Next evidence needed
 
 Collect five owned sketches of known areas and independent reference matches. Start with one real image extraction call, then run the three-hour mapping protocol.
 
-Record every live attempt, failure and correction. Store model outputs under the local gitignored `spike/private/` directory until reviewed for sharing. Update this record after the real test; do not relabel a synthetic pass as a model pass.
+Record every live attempt, failure and correction. Store model outputs under the local gitignored `evals/probes/private/` directory until reviewed for sharing. Update this record after the real test; do not relabel a synthetic pass as a model pass.

@@ -23,7 +23,7 @@ python -m venv .venv
 .\scripts\start.ps1        # builds apps/web if needed, then serves http://127.0.0.1:8000
 ```
 
-With no `MODEL_API_KEY` the app runs `MODEL_PROVIDER=mock`: a deterministic stand-in for the model plus an offline OSM snapshot of central Negombo. Open the page, choose **New sketch**, upload `evals/fixtures/demo-sketch.png` (synthetic, regenerate with `scripts/make_demo_sketch.py`), keep the Negombo area, and watch the **Agent run** panel: SketchReader, GeoRetriever, Matcher, Verifier (rejects one naive pick), bounded re-match, Verifier, human review. Then confirm the five landmarks and export GeoJSON. Mock mode ignores the image contents and tests plumbing only. See [docs/AGENT-ARCHITECTURE.md](docs/AGENT-ARCHITECTURE.md).
+With no `MODEL_API_KEY` the app runs `MODEL_PROVIDER=mock`: a deterministic stand-in for the model plus an offline OSM snapshot of central Negombo. Open the page, choose **New sketch**, upload `evals/fixtures/demo-sketch.png` (synthetic, regenerate with `scripts/make_demo_sketch.py`), keep the Negombo area, and watch the **Agent run** panel: SketchReader, GeoRetriever, Matcher, Verifier (rejects one naive pick), bounded re-match, Verifier, human review. Then confirm the five landmarks and export GeoJSON. Mock mode ignores the image contents and tests plumbing only. See [docs/architecture/agent-architecture.md](docs/architecture/agent-architecture.md).
 
 Live Meta mode (**UNVERIFIED**, billed): put `MODEL_API_KEY` in `.env` (never in chat or source) and set `MODEL_PROVIDER=meta` (or leave it unset; a key selects `meta`). Restart. API workbench: <http://127.0.0.1:8000/docs>. `GET /api/runs/{id}/trace` returns the agent steps. Run one server process and one worker; not for public hosting.
 
@@ -80,3 +80,18 @@ The tests exercise synthetic geometry, mocked provider transport, errors, persis
 ## Layout
 
 `apps/api/app/` contains contracts, providers, prompts, geometry, persistence, workflow, export and routes. `apps/api/tests/` contains offline checks. `evals/areas/` contains public area configuration. `requirements.lock.txt` records the exact Windows/Python 3.12 environment tested. No frontend dependencies have been added yet.
+
+
+## Repository layout
+
+```
+apps/api/        FastAPI service (agents, providers, domain logic, tests)
+apps/web/        user interface
+evals/           evaluation runners, fixtures and feasibility probes (evals/probes)
+scripts/         demo data and local tooling
+docs/            architecture/, deployment.md, planning/
+.claude/skills/  agent-architecture, harness, evaluation, deployment skills
+Dockerfile  docker-compose.yml  .github/workflows/ci.yml
+```
+
+Deploy: see [docs/deployment.md](docs/deployment.md).

@@ -5,8 +5,8 @@ Turn an owned sketch of a known area into geographic landmarks the author can in
 This folder is its **own Git repository**. The owner runs `git init` and creates the remote; the parent planning repo ignores this folder. Read this file first. `CLAUDE.md` imports it.
 
 ## Layout
-- `docs/`: planning (workflow, architecture, structure, feasibility test, results). `docs/04-FEASIBILITY-TEST.md` defines the gate; `docs/05-TEST-RESULTS.md` records actual evidence.
-- `spike/`: small feasibility probes and synthetic checks (not product code, not evidence of model performance).
+- `docs/`: [index](docs/README.md): `architecture/` (agent design), `deployment.md`, `planning/` (original plan, feasibility gate, results).
+- `evals/probes/`: small feasibility probes and synthetic checks (not product code, not evidence of model performance).
 - `apps/api/`: FastAPI app and offline tests. Test: `.venv\Scripts\python.exe -m pytest -q`. Run: `scripts\start.ps1` (one worker).
 - `apps/web/`: React UI (`npm ci`, `npm run build`; Node 22+). `evals/`: area configs and benchmark runner. `private/`: gitignored inputs, runs, caches.
 - `.env` (gitignored, never read aloud or printed) holds `MODEL_API_KEY`; `.env.example` is the template.

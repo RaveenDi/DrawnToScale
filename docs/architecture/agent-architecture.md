@@ -48,7 +48,7 @@ Request shapes follow the Meta docs linked in `README.md`; **compatibility with 
 ## How it is evaluated
 
 - Offline tests (`pytest -q`): contracts, geometry, transport, persistence, mock end to end, trace shape and order.
-- Planned, **NOT DONE**: the feasibility gate in `docs/04-FEASIBILITY-TEST.md` (five owned real sketches incl. held-out and ambiguous cases) with metrics recorded in `docs/05-TEST-RESULTS.md`; ablations (with/without Verifier, shortlist recall). No such results exist yet.
+- Planned, **NOT DONE**: the feasibility gate in `docs/planning/04-FEASIBILITY-TEST.md` (five owned real sketches incl. held-out and ambiguous cases) with metrics recorded in `docs/planning/05-TEST-RESULTS.md`; ablations (with/without Verifier, shortlist recall). No such results exist yet.
 
 ## Verified vs UNVERIFIED
 
