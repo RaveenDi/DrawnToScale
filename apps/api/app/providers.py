@@ -125,9 +125,14 @@ class MetaProvider:
             {"type": "image_url", "image_url": {"url": "data:image/png;base64," + base64.b64encode(image).decode()}},
         ])
 
-    def match(self, graph, shortlist):
-        return self.request(Proposals, "match-v1.md", json.dumps({
-            "sketch": graph.model_dump(), "allowed_candidates_by_sketch_id": shortlist}, ensure_ascii=False))
+    name = "meta"
+
+    def match(self, graph, shortlist, hint=None):
+        payload = {"sketch": graph.model_dump(), "allowed_candidates_by_sketch_id": shortlist}
+        if hint:
+            payload["verifier_feedback"] = {"instruction": "Geometry check rejected these earlier picks; choose another allowed ID or null. Only the listed sketch IDs are re-evaluated.",
+                                            "rejected_candidate_ids_by_sketch_id": hint["rejected"]}
+        return self.request(Proposals, "match-v1.md", json.dumps(payload, ensure_ascii=False))
 
 
 def normalized_name(value):

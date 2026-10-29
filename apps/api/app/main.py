@@ -12,6 +12,7 @@ from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from .contracts import Area, Confirmations, GraphEdit
 from .exporting import export_geojson, review_report
+from .mock import FixtureGeography, MockProvider
 from .providers import MetaProvider, OSMProvider, prepare_image
 from .storage import Conflict, NotFound, Store
 from .workflow import Workflow, apply_confirmations, apply_graph_edit
@@ -24,7 +25,14 @@ def create_app(data_dir=None, meta=None, geography=None):
     # Local project config only; no upward .env discovery or environment overrides.
     load_dotenv(ROOT / ".env", override=False)
     store = Store(data_dir or ROOT / "private")
-    meta = meta or MetaProvider(os.getenv("MODEL_API_KEY", ""), os.getenv("META_MODEL", "muse-spark-1.3"))
+    key = os.getenv("MODEL_API_KEY", "").strip()
+    mode = os.getenv("MODEL_PROVIDER", "").strip().lower() or ("meta" if key else "mock")
+    if mode not in {"mock", "meta"}:
+        raise RuntimeError("MODEL_PROVIDER must be mock or meta")
+    if meta is None:
+        meta = MockProvider() if mode == "mock" else MetaProvider(key, os.getenv("META_MODEL", "muse-spark-1.3"))
+        if mode == "mock":
+            geography = geography or FixtureGeography()
     geography = geography or OSMProvider(store.root / "geography-cache")
     workflow = Workflow(store, meta, geography)
 
@@ -75,7 +83,7 @@ def create_app(data_dir=None, meta=None, geography=None):
 
     @app.get("/api/health")
     def health():
-        return {"status": "ok", "meta_configured": meta.configured, "mode": "local_feasibility",
+        return {"status": "ok", "meta_configured": meta.configured, "provider": getattr(meta, "name", "custom"), "mode": "local_feasibility",
                 "live_performance": "unverified"}
 
     @app.post("/api/runs", status_code=202)
@@ -105,6 +113,10 @@ def create_app(data_dir=None, meta=None, geography=None):
     @app.get("/api/runs/{run_id}")
     def read_run(run=Depends(authorized)):
         return run
+
+    @app.get("/api/runs/{run_id}/trace")
+    def trace(run=Depends(authorized)):
+        return {"id": run["id"], "status": run["status"], "model_calls": run["model_calls"], "steps": run.get("trace", [])}
 
     @app.get("/api/runs/{run_id}/image")
     def read_image(run=Depends(authorized)):
