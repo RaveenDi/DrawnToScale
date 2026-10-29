@@ -22,10 +22,11 @@ export type Run = {
   proposals: {sketch_id: string; candidate_id: string | null; evidence: string}[]
   confirmations: Record<string, Decision>; alignment: Alignment | null
   candidate_manifest: {attribution?: string; license_url?: string; retrieved_at?: string; candidate_count?: number; note?: string} | null
-  error: string | null; model_calls: number; attempts: number
+  error: string | null; model_calls: number; attempts: number; trace?: TraceStep[]
 }
+export type TraceStep = {agent: string; role: string; model: string; input_summary: string; output_summary: string; duration_ms: number; status: string}
 export type Session = {id: string; access_token: string}
-export type Health = {status: string; meta_configured: boolean}
+export type Health = {status: string; meta_configured: boolean; provider?: string}
 export const ACTIVE = new Set(['created', 'extracting', 'retrieving', 'matching'])
 export const NEGOMBO: Area = {west: 79.823, south: 7.199, east: 79.848, north: 7.222}
 export function landmarkState(run: Run, id: string) {

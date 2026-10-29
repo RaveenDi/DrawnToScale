@@ -4,6 +4,7 @@ import SketchPanel from './components/SketchPanel'
 import ReviewPanel from './components/ReviewPanel'
 import UploadDialog from './components/UploadDialog'
 import Modal from './components/Modal'
+import AgentPanel from './components/AgentPanel'
 import {useWorkspace} from './useWorkspace'
 import {candidateFor} from './types'
 import type {Area, Landmark} from './types'
@@ -59,7 +60,7 @@ export default function App() {
 
     <div className="app-main">
       <header className="topbar"><div className="wordmark">drawn<span className="wordmark-to"> to </span>scale<span className="brand-period">.</span></div><span className="header-separator"/><span className="header-location">Workspace</span>
-        <div className="topbar-right"><button className={`connection-status ${health?.meta_configured ? 'connected' : ''}`} onClick={() => setDialog('setup')}><i/>{health?.meta_configured ? 'Connected' : 'Local workspace'}<ChevronSmall/></button><span className="version">EARLY ACCESS</span></div></header>
+        <div className="topbar-right"><button className={`connection-status ${health?.meta_configured ? 'connected' : ''}`} onClick={() => setDialog('setup')}><i/>{health?.provider === 'mock' ? 'Mock mode (offline)' : health?.meta_configured ? 'Connected' : 'Local workspace'}<ChevronSmall/></button><span className="version">EARLY ACCESS</span></div></header>
       <main>
         <div className="workspace-title"><div><div className="eyebrow title-eyebrow"><span className="tiny-line"/>{sample ? 'SAMPLE WORKSPACE' : 'YOUR WORKSPACE'}<span className="title-slash">/</span>NEGOMBO</div><h1>{workspace.fileName}</h1><p>A place you know. A map you can share.</p></div>
           <div className="workspace-actions"><button className="button subtle" onClick={openNew} disabled={busy || active}><Plus size={16}/>New sketch</button><button className="button primary" onClick={() => setDialog('export')} disabled={!editable || busy}><ArrowDownToLine size={16}/>Export map</button></div>
@@ -78,6 +79,8 @@ export default function App() {
               if (draft && run.graph && await workspace.editGraph({...run.graph, landmarks: run.graph.landmarks.map(p => p.id === draft.id ? draft : p)})) setDraft(null)
             }}/>
         </div>
+
+        <AgentPanel run={run}/>
 
         <div className="workspace-footer"><div><span className="footer-icon"><Compass size={17}/></span><p><strong>Your knowledge. The final say.</strong><span>Only places you confirm become points on your exported map.</span></p></div><button className="inline-link" onClick={() => setDialog('help')}>How it works<ArrowUpRight size={14}/></button></div>
         <div className="bottom-status"><span><span className="subtle-dot"/>{sample ? 'Sample changes stay in this tab' : 'Changes saved to this local workspace'}</span><span>{run.alignment?.status === 'fitted' ? 'Alignment fitted · independent accuracy unmeasured' : 'Every map starts with a little local knowledge.'}</span>
