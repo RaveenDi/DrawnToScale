@@ -71,10 +71,10 @@ The tests exercise synthetic geometry, mocked provider transport, errors, persis
 
 ## Bounds and remaining work
 
-- A normal nonempty run uses two model requests (three if the Verifier triggers its one bounded re-match), each capped at 4,096 completion tokens including reasoning. No automatic retry. Explicit retries reuse saved successful stages; each run permits at most three processing attempts and four model requests total. Provider timeout does not guarantee remote cancellation.
+- A normal nonempty run is one extraction call plus a bounded tool-calling loop (at most 8 model turns, 16 model calls per run across attempts, each capped at 4,096 completion tokens). HTTP 429/5xx and timeouts get at most 2 retries; an invalid JSON reply gets one repair. Explicit retries reuse saved successful stages; each run permits at most three processing attempts. Provider timeout does not guarantee remote cancellation. Details: `docs/architecture/agent-architecture.md`, `docs/deployment.md`.
 - Inputs: at most 8 MiB, 20 megapixels, one PNG/JPEG, 12 landmarks. Area: at most 20 km diagonal; no antimeridian crossing. More than 1,500 named geographic features requires a smaller area.
 - Images, run records, reports and candidate caches stay under gitignored `private/`. Use the authenticated DELETE route to remove a run and normalized image. Automatic age-based retention, secure erasure and cloud-backup controls are not implemented; this directory may still be synced by OneDrive.
-- The browser map, area search, manual pin placement, roads/boundaries, deployment and benchmark runner are not built. First milestone exports points only.
+- The browser map, area search, manual pin placement, roads/boundaries, deployment are not built. The evaluation harness exists (`evals/README.md`) but has run on the synthetic demo manifest only. First milestone exports points only.
 - Test five owned sketches, including held-out and ambiguous cases, before treating the product gate as passed. See the planning folder's feasibility protocol. Accuracy, time savings and real-model task performance remain unmeasured.
 
 ## Layout
