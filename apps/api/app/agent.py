@@ -1,7 +1,7 @@
 """Bounded tool-calling matching agent. The model chooses deterministic tools; the deterministic
 Verifier decides; on rejection the model gets the feedback once. Hard caps on turns, model calls,
 tool calls; unknown tools and bad arguments come back as tool errors; every turn and tool call is
-a trace step. The wire format of tool calling lives in the provider (UNVERIFIED against the live API)."""
+a trace step. The wire format of tool calling lives in the provider (verified against the live API on 2026-10-30)."""
 from dataclasses import dataclass, field
 import json
 import time

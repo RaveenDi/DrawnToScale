@@ -34,15 +34,16 @@ def create_app(data_dir=None, meta=None, geography=None):
         raise RuntimeError("MODEL_PROVIDER must be mock, meta or replay")
     recordings = store.root / "recordings"  # private/recordings: gitignored, never contains the API key
     model = os.getenv("META_MODEL", "muse-spark-1.3")
+    effort = os.getenv("META_REASONING_EFFORT", "").strip() or None  # minimal|low|medium|high|xhigh; part of the replay key
     settings = Settings.from_env()
     retry = {"retries": settings.http_retries, "backoff_s": settings.backoff_s, "max_wait_s": settings.max_retry_wait_s}
     if meta is None:
         if mode == "mock":
             meta, geography = MockProvider(), geography or FixtureGeography()
         elif mode == "meta":
-            meta = MetaProvider(key, model, transport=Transport(key, recordings=recordings, **retry))
+            meta = MetaProvider(key, model, transport=Transport(key, recordings=recordings, **retry), reasoning_effort=effort)
         else:
-            meta = MetaProvider("", model, transport=Transport(mode="replay", recordings=recordings))
+            meta = MetaProvider("", model, transport=Transport(mode="replay", recordings=recordings), reasoning_effort=effort)
     geography = geography or OSMProvider(store.root / "geography-cache", offline=(mode == "replay"))
     workflow = Workflow(store, meta, geography, settings)
 

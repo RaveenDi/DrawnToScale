@@ -87,8 +87,10 @@ def sum_usage(usages):
 
 
 class MetaProvider:
-    def __init__(self, key="", model="muse-spark-1.3", client=None, transport=None):
+    def __init__(self, key="", model="muse-spark-1.3", client=None, transport=None, *,
+                 max_completion_tokens=4096, reasoning_effort=None):
         self.key, self.model = key, model
+        self.max_completion_tokens, self.reasoning_effort = max_completion_tokens, reasoning_effort  # effort: minimal|low|medium|high|xhigh; "none" is HTTP 400 on Muse Spark
         self.transport = transport or Transport(key, client=client)
         self.client = self.transport.client
 
@@ -100,13 +102,18 @@ class MetaProvider:
     def name(self):
         return "replay" if self.transport.mode == "replay" else "meta"
 
+    def _base(self):
+        body = {"model": self.model, "max_completion_tokens": self.max_completion_tokens}
+        if self.reasoning_effort:
+            body["reasoning_effort"] = self.reasoning_effort
+        return body
+
     def request(self, contract, prompt_name, content):
         if not self.configured:
             raise ProviderError("Set MODEL_API_KEY in project/.env before starting a live run")
         prompt = (PROMPTS / prompt_name).read_text(encoding="utf-8")
         schema = contract.model_json_schema()
-        body = {"model": self.model, "max_completion_tokens": 4096,
-                "messages": [{"role": "system", "content": prompt}, {"role": "user", "content": content}],
+        body = {**self._base(), "messages": [{"role": "system", "content": prompt}, {"role": "user", "content": content}],
                 "response_format": {"type": "json_schema", "json_schema": {
                     "name": contract.__name__, "strict": True, "schema": schema}}}
         response, info = self.transport.post(body)
@@ -143,8 +150,11 @@ class MetaProvider:
         ])
 
     # --- tool-calling turn -------------------------------------------------------------------------
-    # The OpenAI-compatible `tools` / `tool_calls` shape below is UNVERIFIED against the live Meta API.
-    # It is isolated in wire_messages / wire_tools / agent_turn: fix only these after the smoke test.
+    # Wire shape VERIFIED live 2026-10-30 (tests/fixtures/live/agent-turn-*.json): `tools` are {type:"function",
+    # function:{name,description,parameters}}, tool_choice only "auto" (anything else is HTTP 400), the reply has
+    # finish_reason "tool_calls" and message.tool_calls[].function.arguments as a JSON *string*, content may be text
+    # or null, several calls per turn are normal. Results go back as the full assistant message followed by one
+    # {role:"tool", tool_call_id, content:string} per call. Isolated in wire_messages / wire_tools / agent_turn.
     @staticmethod
     def wire_tools(tools):
         return [{"type": "function", "function": {"name": t["name"], "description": t["description"], "parameters": t["parameters"]}}
@@ -169,7 +179,7 @@ class MetaProvider:
     def agent_turn(self, system, transcript, tools):
         if not self.configured:
             raise ProviderError("Set MODEL_API_KEY in project/.env before starting a live run")
-        body = {"model": self.model, "max_completion_tokens": 4096, "messages": self.wire_messages(system, transcript),
+        body = {**self._base(), "messages": self.wire_messages(system, transcript),
                 "tools": self.wire_tools(tools), "tool_choice": "auto"}
         response, info = self.transport.post(body)
         try:

@@ -14,14 +14,14 @@ def test_token_counts_accept_both_shapes_and_missing_usage():
     assert token_counts({"prompt_tokens": True}) == (None, None)
 
 
-def test_cost_is_estimated_only_with_tokens_and_a_priced_model_and_labelled_unverified():
-    assert estimate_cost("muse-spark-1.3", 1_000_000, 1_000_000) == 5.0  # placeholder 1.0 + 4.0 USD per million tokens
+def test_cost_is_estimated_only_with_tokens_and_a_priced_model_and_labelled_verified():
+    assert estimate_cost("muse-spark-1.3", 1_000_000, 1_000_000) == 5.5  # 1.25 + 4.25 USD per million tokens, verified 2026-10-30
     assert estimate_cost("muse-spark-1.3", None, 5) is None and estimate_cost("unknown-model", 1, 1) is None
-    assert "UNVERIFIED" in cost_basis("muse-spark-1.3") and cost_basis("unknown-model") is None
+    assert cost_basis("muse-spark-1.3") == "price table (verified)" and cost_basis("unknown-model") is None
     step = normalize({"usage": {"prompt_tokens": 100, "completion_tokens": 50}, "latency_ms": 321, "requested_model": "muse-spark-1.3",
                       "prompt_version": "extract-v1", "retries": 1}, model="x", prompt_version="p", duration_ms=999)
     assert (step["input_tokens"], step["output_tokens"], step["latency_ms"], step["retries"]) == (100, 50, 321, 1)
-    assert step["prompt_version"] == "extract-v1" and step["est_cost_usd"] == 0.0003 and "UNVERIFIED" in step["cost_basis"]
+    assert step["prompt_version"] == "extract-v1" and step["est_cost_usd"] == round((100 * 1.25 + 50 * 4.25) / 1e6, 6) and step["cost_basis"] == "price table (verified)"
     bare = normalize({"provider": "mock"}, model="mock", prompt_version="p", duration_ms=12)
     assert bare["input_tokens"] is None and bare["est_cost_usd"] is None and bare["latency_ms"] == 12 and bare["cost_basis"] is None
 
@@ -48,11 +48,11 @@ def test_run_trace_exposes_per_step_telemetry_and_totals(tmp_path, providers, im
     turns = [s for s in body["steps"] if s["kind"] == "model_turn"]
     assert len(turns) == 2 and all(s["telemetry"]["prompt_version"] == "match-agent-v1" for s in turns)
     assert turns[0]["telemetry"]["input_tokens"] == 10 and turns[0]["telemetry"]["output_tokens"] == 4
-    assert turns[0]["telemetry"]["est_cost_usd"] == 0.000026 and turns[0]["telemetry"]["model"] == "muse-spark-1.3"
+    assert turns[0]["telemetry"]["est_cost_usd"] == round((10 * 1.25 + 4 * 4.25) / 1e6, 6) and turns[0]["telemetry"]["model"] == "muse-spark-1.3"
     reader = body["steps"][0]["telemetry"]
     assert reader["input_tokens"] is None and reader["model_calls"] == 1 and reader["prompt_version"] == "extract-v1"
     totals_ = body["totals"]
     assert totals_ == run["totals"] and totals_["model_calls"] == 3 and totals_["model_turns"] == 2 and totals_["tool_calls"] == 8
-    assert (totals_["input_tokens"], totals_["output_tokens"]) == (20, 8) and totals_["est_cost_usd"] == 0.000052
-    assert "UNVERIFIED" in totals_["cost_basis"] and body["agent"]["status"] == "completed"
-    assert body["prices"]["model"]["muse-spark-1.3"]["verified"] is False
+    assert (totals_["input_tokens"], totals_["output_tokens"]) == (20, 8) and totals_["est_cost_usd"] == round(2 * round((10 * 1.25 + 4 * 4.25) / 1e6, 6), 6)
+    assert totals_["cost_basis"] == "price table (verified)" and body["agent"]["status"] == "completed"
+    assert body["prices"]["model"]["muse-spark-1.3"]["verified"] is True

@@ -25,10 +25,10 @@ class Settings:
         return replace(cls(), **values)
 
 
-# USD per million tokens. UNVERIFIED PLACEHOLDERS: not taken from Meta documentation, only here so the
-# cost plumbing is exercised. Replace with the published rates before quoting any cost; every report and
-# the UI label cost as "estimated, UNVERIFIED prices" while verified is False.
+# USD per million tokens. VERIFIED 2026-10-30 against https://dev.meta.ai/docs/pricing-rate-limits
+# (Standard mode; cached input $0.15/M is not modelled, so cost is a slight over-estimate when the
+# provider reports cached tokens). Never use a -contributor model for real data: it trains on your prompts.
 PRICES_USD_PER_MTOK = {
-    "muse-spark-1.3": {"input": 1.0, "output": 4.0, "verified": False,
-                       "source": "placeholder, not from docs/ or Meta documentation"},
+    "muse-spark-1.3": {"input": 1.25, "output": 4.25, "verified": True,
+                       "source": "dev.meta.ai/docs/pricing-rate-limits, 2026-10-30"},
 }

@@ -81,8 +81,9 @@ def build_providers(kind, recordings, settings):
     if kind == "mock":
         return MockProvider(), FixtureGeography()
     cache = ROOT / "private" / "geography-cache"
+    effort = os.getenv("META_REASONING_EFFORT", "").strip() or None  # part of the request, hence of the replay key
     if kind == "replay":
-        return (MetaProvider("", transport=Transport(mode="replay", recordings=recordings)), OSMProvider(cache, offline=True))
+        return (MetaProvider("", transport=Transport(mode="replay", recordings=recordings), reasoning_effort=effort), OSMProvider(cache, offline=True))
     from dotenv import load_dotenv
     load_dotenv(ROOT / ".env", override=False)
     key = os.getenv("MODEL_API_KEY", "").strip()
@@ -90,7 +91,7 @@ def build_providers(kind, recordings, settings):
         raise SystemExit("--provider meta needs MODEL_API_KEY in .env (live, billed calls).")
     transport = Transport(key, recordings=recordings, retries=settings.http_retries, backoff_s=settings.backoff_s,
                           max_wait_s=settings.max_retry_wait_s)
-    return MetaProvider(key, os.getenv("META_MODEL", "muse-spark-1.3"), transport=transport), OSMProvider(cache)
+    return MetaProvider(key, os.getenv("META_MODEL", "muse-spark-1.3"), transport=transport, reasoning_effort=effort), OSMProvider(cache)
 
 
 def run_item(workflow, store, item, area):
