@@ -32,8 +32,9 @@ def test_mock_pipeline_end_to_end_with_verifier_rematch(client):
     assert len(run["graph"]["landmarks"]) == 5
     allowed = {c["id"] for c in run["candidates"]}
     assert all(p["candidate_id"] in allowed for p in run["proposals"] if p["candidate_id"])
-    # extract + match + one bounded re-match
-    assert run["model_calls"] == 3
+    # extract + 6 scripted tool-loop turns (search, get, propose+finish, then after Verifier feedback: search, distance, propose+finish)
+    assert run["model_calls"] == 7
+    assert run["agent"]["status"] == "completed" and run["agent"]["recovered"] is True
     # mock proposals land on the intended OSM features after the verifier-triggered re-match
     import json
     intended = json.loads((ROOT / "evals/fixtures/demo-sketch.json").read_text())["intended_osm_ids"]
@@ -48,10 +49,15 @@ def test_mock_pipeline_end_to_end_with_verifier_rematch(client):
 def test_trace_steps(client):
     url, headers, run = run_demo(client)
     steps = client.get(url + "/trace", headers=headers).json()["steps"]
-    assert [s["agent"] for s in steps] == ["SketchReader", "GeoRetriever", "Matcher", "Verifier", "Matcher", "Verifier", "HumanReview"]
     for s in steps:
         assert {"agent", "role", "model", "input_summary", "output_summary", "duration_ms", "status"} <= set(s)
-    assert steps[3]["status"] == "rejected" and steps[5]["status"] == "ok"
-    assert steps[1]["model"].startswith("none") and steps[3]["model"].startswith("none")
+    turns = [s for s in steps if s["agent"] != "Tool"]
+    assert [s["agent"] for s in turns] == ["SketchReader", "GeoRetriever"] + ["Matcher"] * 3 + ["Verifier"] + ["Matcher"] * 3 + ["Verifier", "HumanReview"]
+    verifiers = [s for s in steps if s["agent"] == "Verifier"]
+    assert [v["status"] for v in verifiers] == ["rejected", "ok"]
+    tools = [s["tool"] for s in steps if s["kind"] == "tool_call"]
+    assert {"search_candidates", "get_candidate", "distance_between", "propose_match", "finish"} == set(tools)
+    assert all(s["model"].startswith("none") for s in steps if s["kind"] in {"tool_call", "deterministic"})
+    assert all(s["kind"] == "model_turn" for s in steps if s["agent"] == "Matcher")
     assert steps[-1]["status"] == "awaiting_human"
     assert client.get(url + "/trace").status_code == 401

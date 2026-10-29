@@ -12,7 +12,8 @@ import httpx
 from PIL import Image, ImageOps, UnidentifiedImageError
 
 from .contracts import Area, Candidate, Proposals, SketchGraph
-from .llm import META_URL, ProviderError, Transport, digest, read_json_response, timestamp  # noqa: F401  (re-exported)
+from .llm import (META_URL, AgentTurn, ProviderError, ToolCall, Transport, digest,  # noqa: F401  (re-exported)
+                  read_json_response, timestamp)
 
 OVERPASS_URL = "https://overpass-api.de/api/interpreter"
 ATTRIBUTION = "© OpenStreetMap contributors"
@@ -96,6 +97,55 @@ class MetaProvider:
             {"type": "image_url", "image_url": {"url": "data:image/png;base64," + base64.b64encode(image).decode()}},
         ])
 
+    # --- tool-calling turn -------------------------------------------------------------------------
+    # The OpenAI-compatible `tools` / `tool_calls` shape below is UNVERIFIED against the live Meta API.
+    # It is isolated in wire_messages / wire_tools / agent_turn: fix only these after the smoke test.
+    @staticmethod
+    def wire_tools(tools):
+        return [{"type": "function", "function": {"name": t["name"], "description": t["description"], "parameters": t["parameters"]}}
+                for t in tools]
+
+    @staticmethod
+    def wire_messages(system, transcript):
+        out = [{"role": "system", "content": system}]
+        for m in transcript:
+            if m["role"] == "assistant":
+                message = {"role": "assistant", "content": m.get("content")}
+                if m.get("tool_calls"):
+                    message["tool_calls"] = [{"id": c.id, "type": "function", "function": {"name": c.name, "arguments": c.arguments}}
+                                             for c in m["tool_calls"]]
+                out.append(message)
+            elif m["role"] == "tool":
+                out.append({"role": "tool", "tool_call_id": m["tool_call_id"], "content": m["content"]})
+            else:
+                out.append({"role": "user", "content": m["content"]})
+        return out
+
+    def agent_turn(self, system, transcript, tools):
+        if not self.configured:
+            raise ProviderError("Set MODEL_API_KEY in project/.env before starting a live run")
+        body = {"model": self.model, "max_completion_tokens": 4096, "messages": self.wire_messages(system, transcript),
+                "tools": self.wire_tools(tools), "tool_choice": "auto"}
+        response, info = self.transport.post(body)
+        try:
+            choice = response["choices"][0]
+            message = choice["message"]
+            if choice.get("finish_reason") == "length" or message.get("refusal"):
+                raise ValueError("Incomplete or refused response")
+            calls = []
+            for i, raw in enumerate(message.get("tool_calls") or []):
+                function = raw.get("function") or {}
+                arguments = function.get("arguments", "")
+                calls.append(ToolCall(id=str(raw.get("id") or f"call_{i}"), name=str(function.get("name") or ""),
+                                      arguments=arguments if isinstance(arguments, str) else json.dumps(arguments)))
+            content = message.get("content")
+        except (ValueError, KeyError, IndexError, TypeError, AttributeError):
+            raise ProviderError("Model turn was incomplete, refused or had an unexpected tool-call shape; review and retry") from None
+        return AgentTurn(content if isinstance(content, str) else None, calls, {
+            "provider": self.name, "requested_model": self.model, "returned_model": response.get("model"),
+            "response_id": response.get("id"), "usage": response.get("usage"), "latency_ms": info["latency_ms"],
+            "retries": info.get("retries", 0), "replayed": info["replayed"], "prompt_version": "match-agent-v1"})
+
     def match(self, graph, shortlist, hint=None):
         payload = {"sketch": graph.model_dump(), "allowed_candidates_by_sketch_id": shortlist}
         if hint:
@@ -108,18 +158,22 @@ def normalized_name(value):
     return " ".join("".join(c if c.isalnum() else " " for c in unicodedata.normalize("NFKC", value).casefold()).split())
 
 
+def rank_candidates(query, candidates, kind=None, limit=6):
+    """Deterministic fuzzy name search over Candidate objects (label + aliases), optional type filter."""
+    name, wanted = normalized_name(query), normalized_name(kind or "")
+    ranked = []
+    for candidate in candidates:
+        if wanted and wanted not in normalized_name(candidate.type):
+            continue
+        names = [normalized_name(n) for n in [candidate.label, *candidate.aliases]]
+        score = max((SequenceMatcher(None, name, n).ratio() for n in names if name and n), default=0)
+        if score >= 0.35:
+            ranked.append((score, candidate.id, candidate))
+    return [c for _, _, c in sorted(ranked, key=lambda x: (-x[0], x[1]))[:limit]]
+
+
 def shortlist_candidates(graph, candidates):
-    result = {}
-    for landmark in graph.landmarks:
-        name = normalized_name(landmark.label)
-        ranked = []
-        for candidate in candidates:
-            names = [normalized_name(n) for n in [candidate.label, *candidate.aliases]]
-            score = max((SequenceMatcher(None, name, n).ratio() for n in names if name and n), default=0)
-            if score >= 0.35:
-                ranked.append((score, candidate.id, candidate.model_dump()))
-        result[landmark.id] = [c for _, _, c in sorted(ranked, key=lambda x: (-x[0], x[1]))[:6]]
-    return result
+    return {landmark.id: [c.model_dump() for c in rank_candidates(landmark.label, candidates)] for landmark in graph.landmarks}
 
 
 def validate_proposals(graph, proposals, shortlist):

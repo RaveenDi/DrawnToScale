@@ -2,16 +2,22 @@ from concurrent.futures import ThreadPoolExecutor
 import threading
 import time
 
-from .contracts import Area, SketchGraph
+from .agent import MatchAgent
+from .config import Settings
+from .contracts import Area, Candidate, SketchGraph
 from .geometry import align
+from .llm import call_budget
 from .providers import ProviderError, shortlist_candidates, validate_proposals
 from .storage import EDITABLE, Conflict
+from .telemetry import normalize, totals
+from .tools import MatchTools
 from .verifier import verify
 
 
 class Workflow:
-    def __init__(self, store, meta, geography):
+    def __init__(self, store, meta, geography, settings=None):
         self.store, self.meta, self.geography = store, meta, geography
+        self.settings = settings or Settings.from_env()
         self.executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="sketch-worker")
         self.slot = threading.BoundedSemaphore(1)
 
@@ -34,8 +40,8 @@ class Workflow:
 
     def count_call(self, run_id):
         def increment(run):
-            if run["model_calls"] >= 4:
-                raise ProviderError("Four model attempts already used for this run; create a new run after review")
+            if run["model_calls"] >= self.settings.max_model_calls:
+                raise ProviderError(f"The {self.settings.max_model_calls}-call model budget for this run is used; review it or create a new run")
             run["model_calls"] += 1
         self.store.update(run_id, increment, event={"kind": "model_call_started"})
 
@@ -51,12 +57,16 @@ class Workflow:
             self.slot.release()
 
     def _add_step(self, run_id, step):
-        self.store.update(run_id, lambda r: r.setdefault("trace", []).append(step))
+        def add(run):
+            run.setdefault("trace", []).append(step)
+            run["totals"] = totals(run["trace"])
+        self.store.update(run_id, add)
 
-    def _step(self, run_id, agent, role, model, input_summary, fn):
-        """Run fn() -> (value, output_summary, status); record the agent step either way."""
+    def _step(self, run_id, agent, role, model, input_summary, fn, *, kind="deterministic", prompt_version=None, raw=None):
+        """Run fn() -> (value, output_summary, status); record the agent step either way.
+        Model steps pass raw(value) -> provider telemetry so tokens, latency and estimated cost are recorded."""
         started = time.monotonic()
-        base = {"agent": agent, "role": role, "model": model, "input_summary": input_summary}
+        base = {"agent": agent, "kind": kind, "role": role, "model": model, "input_summary": input_summary}
         try:
             value, output, status = fn()
         except Exception as exc:
@@ -64,8 +74,11 @@ class Workflow:
             self._add_step(run_id, {**base, "output_summary": msg, "duration_ms": round((time.monotonic() - started) * 1000),
                                     "status": "failed"})
             raise
-        self._add_step(run_id, {**base, "output_summary": output, "duration_ms": round((time.monotonic() - started) * 1000),
-                                "status": status})
+        duration = round((time.monotonic() - started) * 1000)
+        step = {**base, "output_summary": output, "duration_ms": duration, "status": status}
+        if raw:
+            step["telemetry"] = normalize(raw(value), model=model, prompt_version=prompt_version, duration_ms=duration)
+        self._add_step(run_id, step)
         return value
 
     def process(self, run_id):
@@ -73,19 +86,20 @@ class Workflow:
         if run["attempts"] >= 3:
             raise ProviderError("Three processing attempts used; review this run before starting another")
         model = getattr(self.meta, "model", "test-double")
-        run = self.stage(run_id, "extracting", attempts=run["attempts"] + 1, error=None)
+        run = self.stage(run_id, "extracting", attempts=run["attempts"] + 1, error=None, agent=None)
         if run["graph"] is None:
             def read():
                 self.count_call(run_id)
                 graph, telemetry = self.meta.extract(self.store.image_path(run_id).read_bytes(), run["context"])
                 return (graph, telemetry), f"{len(graph.landmarks)} landmarks, north={graph.north_direction}", "ok"
             graph, telemetry = self._step(run_id, "SketchReader", "Read the sketch image into a structured landmark graph", model,
-                                          f'image {run["image"]["width"]}x{run["image"]["height"]}, schema SketchGraph', read)
+                                          f'image {run["image"]["width"]}x{run["image"]["height"]}, schema SketchGraph', read,
+                                          kind="model_call", prompt_version="extract-v1", raw=lambda v: v[1])
             run = self.stage(run_id, "retrieving", graph=graph.model_dump(), original_graph=graph.model_dump(),
                              telemetry=[*run["telemetry"], {"stage": "extraction", **telemetry}])
         else:
             graph = SketchGraph.model_validate(run["graph"])
-            self._add_step(run_id, {"agent": "SketchReader", "role": "Read the sketch image", "model": model,
+            self._add_step(run_id, {"agent": "SketchReader", "kind": "reused", "role": "Read the sketch image", "model": model,
                                     "input_summary": "saved result", "output_summary": f"{len(graph.landmarks)} landmarks reused",
                                     "duration_ms": 0, "status": "reused"})
             run = self.stage(run_id, "retrieving")
@@ -104,38 +118,57 @@ class Workflow:
                              candidate_manifest=manifest, shortlist=shortlist)
         else:
             run = self.stage(run_id, "matching")
-        history = run["telemetry"]
+        history, agent_summary = run["telemetry"], None
         if graph.landmarks and any(run["shortlist"].values()):
-            def match():
-                self.count_call(run_id)
-                proposals, telemetry = self.meta.match(graph, run["shortlist"])
-                validate_proposals(graph, proposals, run["shortlist"])
-                n = sum(1 for p in proposals.matches if p.candidate_id)
-                return (proposals, telemetry), f"{n} proposed, {len(proposals.matches) - n} abstained", "ok"
-            proposals, telemetry = self._step(run_id, "Matcher", "Pick one allowed candidate ID per landmark, or abstain", model,
-                                              "sketch graph + allowed candidate IDs only", match)
-            matches = [p.model_dump() for p in proposals.matches]
-            history = [*history, {"stage": "matching", **telemetry}]
-            matches, history = self._verify_loop(run_id, run, graph, matches, history, model)
+            if hasattr(self.meta, "agent_turn"):
+                matches, history, agent_summary = self._agent_match(run_id, run, graph, history, model)
+            else:  # providers without tool calling (test doubles): the original fixed Matcher step
+                def match():
+                    self.count_call(run_id)
+                    proposals, telemetry = self.meta.match(graph, run["shortlist"])
+                    validate_proposals(graph, proposals, run["shortlist"])
+                    n = sum(1 for p in proposals.matches if p.candidate_id)
+                    return (proposals, telemetry), f"{n} proposed, {len(proposals.matches) - n} abstained", "ok"
+                proposals, telemetry = self._step(run_id, "Matcher", "Pick one allowed candidate ID per landmark, or abstain", model,
+                                                  "sketch graph + allowed candidate IDs only", match,
+                                                  kind="model_call", prompt_version="match-v1", raw=lambda v: v[1])
+                matches = [p.model_dump() for p in proposals.matches]
+                history = [*history, {"stage": "matching", **telemetry}]
+                matches, history = self._verify_loop(run_id, run, graph, matches, history, model)
         else:
             matches = [{"sketch_id": p.id, "candidate_id": None, "evidence": "No candidate found in this area; review coverage or correct the label."} for p in graph.landmarks]
-        self._add_step(run_id, {"agent": "HumanReview", "role": "Author confirms or rejects every proposal", "model": "human",
+        self._add_step(run_id, {"agent": "HumanReview", "kind": "human", "role": "Author confirms or rejects every proposal", "model": "human",
                                 "input_summary": f"{len(matches)} proposals", "output_summary": "awaiting your confirmations",
                                 "duration_ms": 0, "status": "awaiting_human"})
-        self.stage(run_id, "needs_confirmation", proposals=matches, telemetry=history,
+        self.stage(run_id, "needs_confirmation", proposals=matches, telemetry=history, agent=agent_summary,
                    alignment={"status": "insufficient_anchors", "required": 3, "accepted": 0, "independent_error_m": None})
 
+    def _verify_step(self, run_id, run, graph, matches, label):
+        def go():
+            result = verify(graph.model_dump(), matches, run["candidates"], run["area"], run["image"])
+            held = result.get("held_out_error_m")
+            out = f'{result["status"]}; outliers={result["outliers"]}' + (f'; held-out median {held["median"]} m' if held else "")
+            return result, out, {"pass": "ok", "rejected": "rejected"}.get(result["status"], "skipped")
+        n = sum(1 for m in matches if m["candidate_id"])
+        return self._step(run_id, "Verifier", "Deterministic geometry check (similarity fit, outliers, held-out error)",
+                          "none (deterministic geometry)", f"{label}: {n} proposed anchors", go)
+
+    def _agent_match(self, run_id, run, graph, history, model):
+        """Tool-calling loop: the model picks deterministic tools, the Verifier decides, one recovery."""
+        tools = MatchTools(graph, [Candidate.model_validate(c) for c in run["candidates"]])
+        charge = lambda: self.count_call(run_id)
+        agent = MatchAgent(self.meta, tools, settings=self.settings, model=model, charge=charge,
+                           verify=lambda rows: self._verify_step(run_id, run, graph, rows, "geometry check"),
+                           calls_left=lambda: self.settings.max_model_calls - self.store.get(run_id)["model_calls"],
+                           record=lambda step: self._add_step(run_id, step))
+        with call_budget(charge):  # providers charge the extra calls they make themselves (JSON repair)
+            outcome = agent.run(graph)
+        history = [*history, *({"stage": "matching_turn", **t} for t in outcome.telemetry)]
+        return outcome.proposals, history, outcome.summary()
+
     def _verify_loop(self, run_id, run, graph, matches, history, model):
-        """Verifier may reject outliers; at most ONE bounded re-match (one extra model call)."""
-        def check(label):
-            def go():
-                result = verify(graph.model_dump(), matches, run["candidates"], run["area"], run["image"])
-                held = result.get("held_out_error_m")
-                out = f'{result["status"]}; outliers={result["outliers"]}' + (f'; held-out median {held["median"]} m' if held else "")
-                return result, out, {"pass": "ok", "rejected": "rejected"}.get(result["status"], "skipped")
-            n = sum(1 for m in matches if m["candidate_id"])
-            return self._step(run_id, "Verifier", "Deterministic geometry check (similarity fit, outliers, held-out error)",
-                              "none (deterministic geometry)", f"{label}: {n} proposed anchors", go)
+        """Legacy fixed-Matcher path: Verifier may reject outliers; at most ONE bounded re-match (one extra model call)."""
+        check = lambda label: self._verify_step(run_id, run, graph, matches, label)
         result = check("first pass")
         if result["status"] != "rejected" or not result["outliers"]:
             return matches, history
@@ -147,7 +180,8 @@ class Workflow:
             validate_proposals(graph, new, run["shortlist"])
             return ({p.sketch_id: p for p in new.matches}, telemetry), f"re-evaluated {sorted(rejected)} only", "ok"
         picked, telemetry = self._step(run_id, "Matcher", "Bounded re-match of Verifier-rejected outliers (max 1)", model,
-                                       f"outliers {sorted(rejected)}, rejected IDs excluded", rematch)
+                                       f"outliers {sorted(rejected)}, rejected IDs excluded", rematch,
+                                       kind="model_call", prompt_version="match-v1", raw=lambda v: v[1])
         history = [*history, {"stage": "rematch", **telemetry}]
         for m in matches:
             if m["sketch_id"] in rejected:
