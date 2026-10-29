@@ -82,6 +82,10 @@ class Workflow:
         return value
 
     def process(self, run_id):
+        with call_budget(lambda: self.count_call(run_id)):  # providers charge the extra calls they make themselves (JSON repair)
+            self._process(run_id)
+
+    def _process(self, run_id):
         run = self.store.get(run_id)
         if run["attempts"] >= 3:
             raise ProviderError("Three processing attempts used; review this run before starting another")
@@ -161,8 +165,7 @@ class Workflow:
                            verify=lambda rows: self._verify_step(run_id, run, graph, rows, "geometry check"),
                            calls_left=lambda: self.settings.max_model_calls - self.store.get(run_id)["model_calls"],
                            record=lambda step: self._add_step(run_id, step))
-        with call_budget(charge):  # providers charge the extra calls they make themselves (JSON repair)
-            outcome = agent.run(graph)
+        outcome = agent.run(graph)
         history = [*history, *({"stage": "matching_turn", **t} for t in outcome.telemetry)]
         return outcome.proposals, history, outcome.summary()
 

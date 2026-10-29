@@ -7,6 +7,7 @@ import pytest
 from PIL import Image
 
 from app.contracts import Proposals, SketchGraph
+from app.llm import Transport
 from app.providers import (MetaProvider, OSMProvider, ProviderError, prepare_image,
                            shortlist_candidates, validate_proposals)
 
@@ -31,8 +32,9 @@ def test_actual_http_request_shape_with_mock_transport(graph, image_bytes):
     assert "test-only-placeholder" not in json.dumps(telemetry)
 
 
-@pytest.mark.parametrize("kind", ["http", "timeout", "redirect", "malformed", "truncated", "invalid_graph"])
-def test_model_failures_are_safe_and_not_retried(kind, image_bytes):
+@pytest.mark.parametrize("kind,expected_calls", [("http", 1), ("timeout", 3), ("redirect", 1), ("malformed", 1), ("truncated", 1), ("invalid_graph", 2)])
+def test_model_failures_are_safe_and_bounded(kind, expected_calls, image_bytes):
+    """Only timeouts (2 retries) and an invalid structured reply (1 repair) cost extra calls; secrets never surface."""
     calls = []
     def respond(request):
         calls.append(request)
@@ -46,11 +48,12 @@ def test_model_failures_are_safe_and_not_retried(kind, image_bytes):
             return httpx.Response(200, text="not json")
         return httpx.Response(200, json={"choices": [{"finish_reason": "length" if kind == "truncated" else "stop",
                                                      "message": {"content": "{}"}}]})
-    provider = MetaProvider("test-placeholder", client=httpx.Client(transport=httpx.MockTransport(respond)))
+    transport = Transport("test-placeholder", client=httpx.Client(transport=httpx.MockTransport(respond)), sleep=lambda seconds: None)
+    provider = MetaProvider("test-placeholder", transport=transport)
     with pytest.raises(ProviderError) as error:
         provider.extract(image_bytes, "")
     assert "SECRET" not in str(error.value)
-    assert len(calls) == 1
+    assert len(calls) == expected_calls
 
 
 def test_unknown_candidate_ids_and_missing_sketch_ids_rejected(graph, candidates):

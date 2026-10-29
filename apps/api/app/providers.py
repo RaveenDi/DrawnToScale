@@ -13,7 +13,7 @@ from PIL import Image, ImageOps, UnidentifiedImageError
 
 from .contracts import Area, Candidate, Proposals, SketchGraph
 from .llm import (META_URL, AgentTurn, ProviderError, ToolCall, Transport, digest,  # noqa: F401  (re-exported)
-                  read_json_response, timestamp)
+                  charge_extra_call, read_json_response, timestamp)
 
 OVERPASS_URL = "https://overpass-api.de/api/interpreter"
 ATTRIBUTION = "© OpenStreetMap contributors"
@@ -52,6 +52,40 @@ def prepare_image(raw):
         raise ValueError("Cannot decode this PNG/JPEG image safely") from None
 
 
+class InvalidOutput(Exception):
+    """Model content that is complete but not valid JSON / not the schema: one repair attempt is allowed."""
+
+    def __init__(self, summary, raw):
+        super().__init__(summary)
+        self.summary, self.raw = summary, raw
+
+
+def parse_structured(contract, response):
+    try:
+        choice = response["choices"][0]
+        raw = choice["message"]["content"]
+        if choice.get("finish_reason") != "stop" or choice["message"].get("refusal") or not isinstance(raw, str):
+            raise ValueError("Incomplete or refused response")
+    except (ValueError, KeyError, IndexError, TypeError):
+        raise ProviderError("Model output failed schema/semantic validation or was incomplete; review and retry") from None
+    try:
+        return contract.model_validate_json(raw), raw
+    except ValueError as exc:
+        errors = getattr(exc, "errors", None)
+        found = errors() if callable(errors) else []
+        summary = "; ".join(f'{".".join(str(p) for p in e["loc"]) or "output"}: {e["msg"]}' for e in found[:3]) or "not valid JSON"
+        raise InvalidOutput(summary[:300], raw[:4000]) from None
+
+
+def sum_usage(usages):
+    """Sum numeric usage fields across a request and its repair; a single response passes through unchanged."""
+    usages = [u for u in usages if isinstance(u, dict)]
+    if len(usages) < 2:
+        return usages[0] if usages else None
+    keys = {k for u in usages for k, v in u.items() if isinstance(v, int) and not isinstance(v, bool)}
+    return {k: sum(u.get(k, 0) for u in usages if isinstance(u.get(k, 0), int)) for k in sorted(keys)}
+
+
 class MetaProvider:
     def __init__(self, key="", model="muse-spark-1.3", client=None, transport=None):
         self.key, self.model = key, model
@@ -76,17 +110,28 @@ class MetaProvider:
                 "response_format": {"type": "json_schema", "json_schema": {
                     "name": contract.__name__, "strict": True, "schema": schema}}}
         response, info = self.transport.post(body)
-        try:
-            choice = response["choices"][0]
-            if choice.get("finish_reason") != "stop" or choice["message"].get("refusal"):
-                raise ValueError("Incomplete or refused response")
-            value = contract.model_validate_json(choice["message"]["content"])
-        except (ValueError, KeyError, IndexError, TypeError):
-            raise ProviderError("Model output failed schema/semantic validation or was incomplete; review and retry") from None
+        repaired, usages = False, [response.get("usage")]
+        while True:
+            try:
+                value, _ = parse_structured(contract, response)
+                break
+            except InvalidOutput as bad:
+                if repaired:
+                    raise ProviderError(f"Model output was still invalid after one repair attempt ({bad.summary}). "
+                                        "Nothing was guessed; the run stops here. Review and retry.") from None
+                repaired = True
+                charge_extra_call()  # the repair is a second billed model call and counts against the run budget
+                body = {**body, "messages": [*body["messages"], {"role": "assistant", "content": bad.raw},
+                        {"role": "user", "content": f"Your previous reply was invalid: {bad.summary}. Reply again with ONLY the corrected JSON object that matches the schema."}]}
+                response, second = self.transport.post(body)
+                usages.append(response.get("usage"))
+                info = {"latency_ms": (info["latency_ms"] or 0) + (second["latency_ms"] or 0), "retries": info["retries"] + second["retries"],
+                        "replayed": info["replayed"] and second["replayed"]}
         return value, {"provider": self.name, "requested_model": self.model,
                        "returned_model": response.get("model"), "response_id": response.get("id"),
-                       "usage": response.get("usage"), "elapsed_seconds": round((info["latency_ms"] or 0) / 1000, 3),
-                       "latency_ms": info["latency_ms"], "replayed": info["replayed"],
+                       "usage": sum_usage(usages), "elapsed_seconds": round((info["latency_ms"] or 0) / 1000, 3),
+                       "latency_ms": info["latency_ms"], "retries": info["retries"], "replayed": info["replayed"],
+                       "repaired": repaired, "model_calls": 2 if repaired else 1,
                        "prompt_version": Path(prompt_name).stem,
                        "prompt_sha256": digest(prompt.encode()),
                        "schema_sha256": digest(json.dumps(schema, sort_keys=True).encode())}

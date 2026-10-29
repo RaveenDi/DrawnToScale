@@ -11,7 +11,7 @@ from pydantic import ValidationError
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from .contracts import Area, Confirmations, GraphEdit
-from .config import PRICES_USD_PER_MTOK
+from .config import PRICES_USD_PER_MTOK, Settings
 from .exporting import export_geojson, review_report
 from .mock import FixtureGeography, MockProvider
 from .llm import Transport
@@ -34,15 +34,17 @@ def create_app(data_dir=None, meta=None, geography=None):
         raise RuntimeError("MODEL_PROVIDER must be mock, meta or replay")
     recordings = store.root / "recordings"  # private/recordings: gitignored, never contains the API key
     model = os.getenv("META_MODEL", "muse-spark-1.3")
+    settings = Settings.from_env()
+    retry = {"retries": settings.http_retries, "backoff_s": settings.backoff_s, "max_wait_s": settings.max_retry_wait_s}
     if meta is None:
         if mode == "mock":
             meta, geography = MockProvider(), geography or FixtureGeography()
         elif mode == "meta":
-            meta = MetaProvider(key, model, transport=Transport(key, recordings=recordings))
+            meta = MetaProvider(key, model, transport=Transport(key, recordings=recordings, **retry))
         else:
             meta = MetaProvider("", model, transport=Transport(mode="replay", recordings=recordings))
     geography = geography or OSMProvider(store.root / "geography-cache", offline=(mode == "replay"))
-    workflow = Workflow(store, meta, geography)
+    workflow = Workflow(store, meta, geography, settings)
 
     @asynccontextmanager
     async def lifespan(app):

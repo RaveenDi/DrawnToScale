@@ -26,6 +26,26 @@ class ReplayMiss(ProviderError):
     """Replay mode has no recording for this exact request."""
 
 
+class TransientError(ProviderError):
+    """HTTP 429/5xx or a timeout/network failure: worth a bounded retry."""
+
+    def __init__(self, message, retry_after=None):
+        super().__init__(message)
+        self.retry_after = retry_after
+
+
+TRANSIENT_STATUS = {429, 500, 502, 503, 504}
+
+
+def parse_retry_after(value):
+    """Retry-After in seconds; HTTP-date forms are ignored (the exponential backoff applies instead)."""
+    try:
+        seconds = float(value)
+    except (TypeError, ValueError):
+        return None
+    return seconds if 0 <= seconds < 86_400 else None
+
+
 def digest(raw):
     return hashlib.sha256(raw).hexdigest()
 
@@ -113,8 +133,10 @@ def read_json_response(client, url, *, limit, **kwargs):
     started = time.monotonic()
     try:
         with client.stream("POST", url, **kwargs) as response:
+            if response.status_code in TRANSIENT_STATUS:
+                raise TransientError(f"Provider returned HTTP {response.status_code}.", parse_retry_after(response.headers.get("retry-after")))
             if response.status_code != 200:
-                raise ProviderError(f"Provider returned HTTP {response.status_code}. No automatic retry.")
+                raise ProviderError(f"Provider returned HTTP {response.status_code}. Not retried.")
             chunks, size = [], 0
             for chunk in response.iter_bytes():
                 size += len(chunk)
@@ -122,8 +144,10 @@ def read_json_response(client, url, *, limit, **kwargs):
                     raise ProviderError("Provider response exceeded the size or elapsed-time limit")
                 chunks.append(chunk)
         return json.loads(b"".join(chunks))
-    except (httpx.HTTPError, TimeoutError):
-        raise ProviderError("Provider network/timeout failure. Remote outcome may be unknown; retry explicitly.") from None
+    except (httpx.TimeoutException, httpx.NetworkError, TimeoutError):
+        raise TransientError("Provider network/timeout failure. Remote outcome may be unknown.") from None
+    except httpx.HTTPError:
+        raise ProviderError("Provider request failed. Not retried.") from None
     except (ValueError, UnicodeDecodeError):
         raise ProviderError("Provider returned invalid JSON") from None
 
@@ -131,10 +155,12 @@ def read_json_response(client, url, *, limit, **kwargs):
 class Transport:
     """POST one chat-completions body; returns (response_json, info)."""
 
-    def __init__(self, key="", client=None, *, mode="live", recordings=None, url=META_URL):
+    def __init__(self, key="", client=None, *, mode="live", recordings=None, url=META_URL,
+                 retries=2, backoff_s=1.0, max_wait_s=30.0, sleep=time.sleep):
         if mode not in {"live", "replay"}:
             raise ValueError("Transport mode must be live or replay")
         self.key, self.mode, self.url = key or "", mode, url
+        self.retries, self.backoff_s, self.max_wait_s, self.sleep = retries, backoff_s, max_wait_s, sleep
         self.recordings = Recordings(recordings) if recordings else None
         if mode == "replay" and not self.recordings:
             raise ValueError("Replay mode needs a recordings directory")
@@ -152,9 +178,18 @@ class Transport:
         if not self.configured:
             raise ProviderError("Set MODEL_API_KEY in project/.env before starting a live run")
         started = time.monotonic()
-        response = read_json_response(self.client, self.url, limit=2 * 1024 * 1024,
-                                      headers={"Authorization": "Bearer " + self.key}, json=body)
+        for attempt in range(self.retries + 1):
+            try:
+                response = read_json_response(self.client, self.url, limit=2 * 1024 * 1024,
+                                              headers={"Authorization": "Bearer " + self.key}, json=body)
+                break
+            except TransientError as exc:
+                if attempt >= self.retries:
+                    raise ProviderError(f"{exc} Gave up after {self.retries} retries.") from None
+                if exc.retry_after is not None and exc.retry_after > self.max_wait_s:
+                    raise ProviderError(f"{exc} Retry-After {exc.retry_after:g}s exceeds the {self.max_wait_s:g}s limit; not waiting.") from None
+                self.sleep(max(self.backoff_s * 2 ** attempt, exc.retry_after or 0))  # honour Retry-After, else 1 s, 2 s
         latency_ms = round((time.monotonic() - started) * 1000)
         if self.recordings:
             self.recordings.save(body, response, latency_ms)
-        return response, {"latency_ms": latency_ms, "retries": 0, "replayed": False}
+        return response, {"latency_ms": latency_ms, "retries": attempt, "replayed": False}

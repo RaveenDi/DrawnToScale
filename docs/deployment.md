@@ -17,6 +17,12 @@ Compose: `docker compose up --build`. To use Meta models, copy `.env.example` to
 |---|---|
 | `MODEL_PROVIDER` | `mock` (default without a key), `meta` (live, records every call) or `replay` (answers from recordings, no network, no key) |
 | `MODEL_API_KEY` | Meta Model API key. Never commit it. Server-side only. |
+| `META_MODEL` | Model name, default `muse-spark-1.3` |
+| `AGENT_MAX_STEPS` | Model turns in the matching loop (default 8) |
+| `AGENT_MAX_MODEL_CALLS` | Model calls per run across attempts, incl. extraction and JSON repairs (default 16) |
+| `AGENT_MAX_TOOL_CALLS` | Tool calls per matching loop (default 64) |
+
+Other caps (config.py): 16 tool calls per turn, 2 consecutive unusable turns, 2 HTTP retries (backoff 1 s, 2 s; a `Retry-After` is honoured up to 30 s, a longer one is not waited out). Retried: HTTP 429/500/502/503/504 and timeouts/network errors. Never retried: other 4xx, redirects, truncated output. An invalid JSON/schema reply gets one repair request, then the run fails with a clear message.
 
 ## Record and replay
 
