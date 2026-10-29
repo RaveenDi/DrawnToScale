@@ -15,22 +15,17 @@ Turn an owned sketch of a known area into geographic landmarks that its author c
 
 The current matcher shortlists up to six candidates per landmark by label similarity, then asks the model to select an allowed ID or abstain. The shortlist is a baseline, not a proven matching algorithm. Unknown names or missing OSM coverage can exclude the intended place; all retrieved candidates remain available for manual selection.
 
-## Start on Windows
-
-From this folder:
+## Quick start (mock mode, no API key, no network)
 
 ```powershell
-# The environment and dependencies have already been installed on this machine.
-# On a fresh machine:
 python -m venv .venv
 .\.venv\Scripts\python.exe -m pip install -r requirements.lock.txt
-
-# Add MODEL_API_KEY to .env locally. Do not put a key in chat or source files.
-# .env.example is the template; a blank .env was prepared on this machine.
-.\.venv\Scripts\python.exe -m uvicorn app.main:app --app-dir apps/api --host 127.0.0.1 --port 8000
+.\scripts\start.ps1        # builds apps/web if needed, then serves http://127.0.0.1:8000
 ```
 
-Open <http://127.0.0.1:8000/docs> for the interactive API workbench. Run exactly one server process and one worker; this local prototype is not ready for public hosting. The server can start without a key, but live-run creation returns an actionable configuration error. Restart after changing `.env`.
+With no `MODEL_API_KEY` the app runs `MODEL_PROVIDER=mock`: a deterministic stand-in for the model plus an offline OSM snapshot of central Negombo. Open the page, choose **New sketch**, upload `evals/fixtures/demo-sketch.png` (synthetic, regenerate with `scripts/make_demo_sketch.py`), keep the Negombo area, and watch the **Agent run** panel: SketchReader, GeoRetriever, Matcher, Verifier (rejects one naive pick), bounded re-match, Verifier, human review. Then confirm the five landmarks and export GeoJSON. Mock mode ignores the image contents and tests plumbing only. See [docs/AGENT-ARCHITECTURE.md](docs/AGENT-ARCHITECTURE.md).
+
+Live Meta mode (**UNVERIFIED**, billed): put `MODEL_API_KEY` in `.env` (never in chat or source) and set `MODEL_PROVIDER=meta` (or leave it unset; a key selects `meta`). Restart. API workbench: <http://127.0.0.1:8000/docs>. `GET /api/runs/{id}/trace` returns the agent steps. Run one server process and one worker; not for public hosting.
 
 ## First real case: Negombo
 
@@ -70,13 +65,13 @@ Use the IDs and revision actually returned by your run. A stale revision returns
 .\.venv\Scripts\python.exe -m pytest -q
 ```
 
-Current result: **34 tests passed**, plus a successful local service startup check of the health and OpenAPI routes. The server was shut down after that check; it is not currently left running.
+Current result: **36 tests passed**, plus a successful local service startup check of the health and OpenAPI routes. The server was shut down after that check; it is not currently left running.
 
 The tests exercise synthetic geometry, mocked provider transport, errors, persistence, access checks, corrections, stale edits, export and deletion. They never contact Meta or OSM. In the Codex restricted Windows runner, the test client's internal loopback connection may require the normal host runner; this is separate from external network access. The pinned Starlette version currently emits one deprecation warning for its HTTPX test-client compatibility layer.
 
 ## Bounds and remaining work
 
-- A normal nonempty run uses at most two model requests, each capped at 4,096 completion tokens including reasoning. No automatic retry. Explicit retries reuse saved successful stages; each run permits at most three processing attempts and four model requests total. Provider timeout does not guarantee remote cancellation.
+- A normal nonempty run uses two model requests (three if the Verifier triggers its one bounded re-match), each capped at 4,096 completion tokens including reasoning. No automatic retry. Explicit retries reuse saved successful stages; each run permits at most three processing attempts and four model requests total. Provider timeout does not guarantee remote cancellation.
 - Inputs: at most 8 MiB, 20 megapixels, one PNG/JPEG, 12 landmarks. Area: at most 20 km diagonal; no antimeridian crossing. More than 1,500 named geographic features requires a smaller area.
 - Images, run records, reports and candidate caches stay under gitignored `private/`. Use the authenticated DELETE route to remove a run and normalized image. Automatic age-based retention, secure erasure and cloud-backup controls are not implemented; this directory may still be synced by OneDrive.
 - The browser map, area search, manual pin placement, roads/boundaries, deployment and benchmark runner are not built. First milestone exports points only.
