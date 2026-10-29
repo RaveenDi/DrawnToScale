@@ -43,7 +43,7 @@ class Store:
                "area": area.model_dump(), "image": image_info, "context": context,
                "original_graph": None, "graph": None, "candidates": [], "candidate_manifest": None,
                "shortlist": {}, "proposals": [], "confirmations": {}, "alignment": None,
-               "model_calls": 0, "attempts": 0, "telemetry": [], "events": [], "error": None}
+               "model_calls": 0, "attempts": 0, "telemetry": [], "trace": [], "events": [], "error": None}
         self.image_path(run_id).write_bytes(image)
         try:
             with self.connection() as db:
