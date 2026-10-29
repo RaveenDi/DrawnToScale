@@ -1,8 +1,6 @@
 """Bounded HTTP adapters. All geographic coordinates come from candidate data."""
 import base64
-from datetime import datetime, timezone
 from difflib import SequenceMatcher
-import hashlib
 from io import BytesIO
 import json
 from pathlib import Path
@@ -14,24 +12,12 @@ import httpx
 from PIL import Image, ImageOps, UnidentifiedImageError
 
 from .contracts import Area, Candidate, Proposals, SketchGraph
+from .llm import META_URL, ProviderError, Transport, digest, read_json_response, timestamp  # noqa: F401  (re-exported)
 
-META_URL = "https://api.meta.ai/v1/chat/completions"
 OVERPASS_URL = "https://overpass-api.de/api/interpreter"
 ATTRIBUTION = "© OpenStreetMap contributors"
 LICENSE_URL = "https://www.openstreetmap.org/copyright"
 PROMPTS = Path(__file__).parent / "prompts"
-
-
-class ProviderError(Exception):
-    """An intentionally safe error message suitable for a run report."""
-
-
-def digest(raw):
-    return hashlib.sha256(raw).hexdigest()
-
-
-def timestamp():
-    return datetime.now(timezone.utc).isoformat()
 
 
 def prepare_image(raw):
@@ -65,47 +51,30 @@ def prepare_image(raw):
         raise ValueError("Cannot decode this PNG/JPEG image safely") from None
 
 
-def read_json_response(client, url, *, limit, **kwargs):
-    started = time.monotonic()
-    try:
-        with client.stream("POST", url, **kwargs) as response:
-            if response.status_code != 200:
-                raise ProviderError(f"Provider returned HTTP {response.status_code}. No automatic retry.")
-            chunks, size = [], 0
-            for chunk in response.iter_bytes():
-                size += len(chunk)
-                if size > limit or time.monotonic() - started > 60:
-                    raise ProviderError("Provider response exceeded the size or elapsed-time limit")
-                chunks.append(chunk)
-        return json.loads(b"".join(chunks))
-    except (httpx.HTTPError, TimeoutError):
-        raise ProviderError("Provider network/timeout failure. Remote outcome may be unknown; retry explicitly.") from None
-    except (ValueError, UnicodeDecodeError):
-        raise ProviderError("Provider returned invalid JSON") from None
-
-
 class MetaProvider:
-    def __init__(self, key, model="muse-spark-1.3", client=None):
+    def __init__(self, key="", model="muse-spark-1.3", client=None, transport=None):
         self.key, self.model = key, model
-        self.client = client or httpx.Client(timeout=httpx.Timeout(45, connect=10), follow_redirects=False)
+        self.transport = transport or Transport(key, client=client)
+        self.client = self.transport.client
 
     @property
     def configured(self):
-        return bool(self.key.strip())
+        return self.transport.configured
+
+    @property
+    def name(self):
+        return "replay" if self.transport.mode == "replay" else "meta"
 
     def request(self, contract, prompt_name, content):
         if not self.configured:
             raise ProviderError("Set MODEL_API_KEY in project/.env before starting a live run")
         prompt = (PROMPTS / prompt_name).read_text(encoding="utf-8")
         schema = contract.model_json_schema()
-        started = time.monotonic()
-        response = read_json_response(self.client, META_URL, limit=2 * 1024 * 1024,
-            headers={"Authorization": "Bearer " + self.key}, json={
-                "model": self.model, "max_completion_tokens": 4096,
+        body = {"model": self.model, "max_completion_tokens": 4096,
                 "messages": [{"role": "system", "content": prompt}, {"role": "user", "content": content}],
                 "response_format": {"type": "json_schema", "json_schema": {
-                    "name": contract.__name__, "strict": True, "schema": schema}},
-            })
+                    "name": contract.__name__, "strict": True, "schema": schema}}}
+        response, info = self.transport.post(body)
         try:
             choice = response["choices"][0]
             if choice.get("finish_reason") != "stop" or choice["message"].get("refusal"):
@@ -113,9 +82,11 @@ class MetaProvider:
             value = contract.model_validate_json(choice["message"]["content"])
         except (ValueError, KeyError, IndexError, TypeError):
             raise ProviderError("Model output failed schema/semantic validation or was incomplete; review and retry") from None
-        return value, {"provider": "meta", "requested_model": self.model,
+        return value, {"provider": self.name, "requested_model": self.model,
                        "returned_model": response.get("model"), "response_id": response.get("id"),
-                       "usage": response.get("usage"), "elapsed_seconds": round(time.monotonic() - started, 3),
+                       "usage": response.get("usage"), "elapsed_seconds": round((info["latency_ms"] or 0) / 1000, 3),
+                       "latency_ms": info["latency_ms"], "replayed": info["replayed"],
+                       "prompt_version": Path(prompt_name).stem,
                        "prompt_sha256": digest(prompt.encode()),
                        "schema_sha256": digest(json.dumps(schema, sort_keys=True).encode())}
 
@@ -124,8 +95,6 @@ class MetaProvider:
             {"type": "text", "text": context or "Extract only the visible sketch observations."},
             {"type": "image_url", "image_url": {"url": "data:image/png;base64," + base64.b64encode(image).decode()}},
         ])
-
-    name = "meta"
 
     def match(self, graph, shortlist, hint=None):
         payload = {"sketch": graph.model_dump(), "allowed_candidates_by_sketch_id": shortlist}
@@ -164,19 +133,22 @@ def validate_proposals(graph, proposals, shortlist):
 
 
 class OSMProvider:
-    def __init__(self, cache_dir, client=None):
+    def __init__(self, cache_dir, client=None, offline=False):
         self.cache_dir = Path(cache_dir)
         self.cache_dir.mkdir(parents=True, exist_ok=True)
-        self.client = client or httpx.Client(timeout=httpx.Timeout(40, connect=10), follow_redirects=False,
+        self.offline = offline  # replay mode: use any cached snapshot, never the network
+        self.client = None if offline else client or httpx.Client(timeout=httpx.Timeout(40, connect=10), follow_redirects=False,
                                             headers={"User-Agent": "DrawnToScale/0.1 (local feasibility prototype)"})
 
     def retrieve(self, area: Area):
         bbox = f"{area.south},{area.west},{area.north},{area.east}"
         query = f'[out:json][timeout:25][maxsize:16777216];nwr["name"]({bbox});out center tags;'
         cache = self.cache_dir / (digest(query.encode()) + ".json")
-        if cache.exists() and time.time() - cache.stat().st_mtime < 86400:
+        if cache.exists() and (self.offline or time.time() - cache.stat().st_mtime < 86400):
             data = json.loads(cache.read_text(encoding="utf-8"))
             cached = True
+        elif self.offline:
+            raise ProviderError("Replay mode has no cached geography for this area; run it once in meta mode first")
         else:
             raw = read_json_response(self.client, OVERPASS_URL, limit=8 * 1024 * 1024, data={"data": query})
             if not isinstance(raw, dict) or raw.get("remark") or not isinstance(raw.get("elements"), list):

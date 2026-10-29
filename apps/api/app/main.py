@@ -13,6 +13,7 @@ from starlette.middleware.trustedhost import TrustedHostMiddleware
 from .contracts import Area, Confirmations, GraphEdit
 from .exporting import export_geojson, review_report
 from .mock import FixtureGeography, MockProvider
+from .llm import Transport
 from .providers import MetaProvider, OSMProvider, prepare_image
 from .storage import Conflict, NotFound, Store
 from .workflow import Workflow, apply_confirmations, apply_graph_edit
@@ -27,13 +28,18 @@ def create_app(data_dir=None, meta=None, geography=None):
     store = Store(data_dir or ROOT / "private")
     key = os.getenv("MODEL_API_KEY", "").strip()
     mode = os.getenv("MODEL_PROVIDER", "").strip().lower() or ("meta" if key else "mock")
-    if mode not in {"mock", "meta"}:
-        raise RuntimeError("MODEL_PROVIDER must be mock or meta")
+    if mode not in {"mock", "meta", "replay"}:
+        raise RuntimeError("MODEL_PROVIDER must be mock, meta or replay")
+    recordings = store.root / "recordings"  # private/recordings: gitignored, never contains the API key
+    model = os.getenv("META_MODEL", "muse-spark-1.3")
     if meta is None:
-        meta = MockProvider() if mode == "mock" else MetaProvider(key, os.getenv("META_MODEL", "muse-spark-1.3"))
         if mode == "mock":
-            geography = geography or FixtureGeography()
-    geography = geography or OSMProvider(store.root / "geography-cache")
+            meta, geography = MockProvider(), geography or FixtureGeography()
+        elif mode == "meta":
+            meta = MetaProvider(key, model, transport=Transport(key, recordings=recordings))
+        else:
+            meta = MetaProvider("", model, transport=Transport(mode="replay", recordings=recordings))
+    geography = geography or OSMProvider(store.root / "geography-cache", offline=(mode == "replay"))
     workflow = Workflow(store, meta, geography)
 
     @asynccontextmanager
