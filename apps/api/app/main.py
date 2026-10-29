@@ -11,11 +11,13 @@ from pydantic import ValidationError
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from .contracts import Area, Confirmations, GraphEdit
+from .config import PRICES_USD_PER_MTOK
 from .exporting import export_geojson, review_report
 from .mock import FixtureGeography, MockProvider
 from .llm import Transport
 from .providers import MetaProvider, OSMProvider, prepare_image
 from .storage import Conflict, NotFound, Store
+from .telemetry import totals
 from .workflow import Workflow, apply_confirmations, apply_graph_edit
 
 ROOT = Path(__file__).resolve().parents[3]
@@ -122,7 +124,10 @@ def create_app(data_dir=None, meta=None, geography=None):
 
     @app.get("/api/runs/{run_id}/trace")
     def trace(run=Depends(authorized)):
-        return {"id": run["id"], "status": run["status"], "model_calls": run["model_calls"], "steps": run.get("trace", [])}
+        return {"id": run["id"], "status": run["status"], "model_calls": run["model_calls"], "agent": run.get("agent"),
+                "totals": run.get("totals") or totals(run.get("trace", [])),
+                "prices": {"model": PRICES_USD_PER_MTOK, "note": "Estimated cost only; prices marked verified=false are UNVERIFIED placeholders."},
+                "steps": run.get("trace", [])}
 
     @app.get("/api/runs/{run_id}/image")
     def read_image(run=Depends(authorized)):

@@ -22,9 +22,12 @@ export type Run = {
   proposals: {sketch_id: string; candidate_id: string | null; evidence: string}[]
   confirmations: Record<string, Decision>; alignment: Alignment | null
   candidate_manifest: {attribution?: string; license_url?: string; retrieved_at?: string; candidate_count?: number; note?: string} | null
-  error: string | null; model_calls: number; attempts: number; trace?: TraceStep[]
+  error: string | null; model_calls: number; attempts: number; trace?: TraceStep[]; totals?: RunTotals | null; agent?: AgentOutcome | null
 }
-export type TraceStep = {agent: string; role: string; model: string; input_summary: string; output_summary: string; duration_ms: number; status: string}
+export type StepTelemetry = {model: string; prompt_version: string | null; input_tokens: number | null; output_tokens: number | null; latency_ms: number; est_cost_usd: number | null; cost_basis: string | null; model_calls: number; retries: number; repaired: boolean; replayed: boolean}
+export type TraceStep = {agent: string; kind?: string; tool?: string; role: string; model: string; input_summary: string; output_summary: string; duration_ms: number; status: string; telemetry?: StepTelemetry}
+export type RunTotals = {model_calls: number; model_turns: number; tool_calls: number; retries: number; input_tokens: number | null; output_tokens: number | null; tokens_reported: boolean; model_latency_ms: number; wall_ms: number; est_cost_usd: number | null; cost_basis: string | null}
+export type AgentOutcome = {status: string; detail: string; steps: number; tool_calls: number; recovered: boolean; abstained: string[]}
 export type Session = {id: string; access_token: string}
 export type Health = {status: string; meta_configured: boolean; provider?: string}
 export const ACTIVE = new Set(['created', 'extracting', 'retrieving', 'matching'])
