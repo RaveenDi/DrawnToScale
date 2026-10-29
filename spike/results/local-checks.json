@@ -1,0 +1,38 @@
+{
+  "recorded_date_slt": "2026-10-29",
+  "project": "Drawn to Scale",
+  "core_command": "python drawn-to-scale/spike/check_core.py",
+  "core": {
+    "kind": "synthetic_geometry_only",
+    "checks": {
+      "rotation_scale_translation_recovered": true,
+      "one_bad_correspondence_rejected": true,
+      "unused_point_error_below_1e-8_synthetic_units": true,
+      "too_few_anchors_rejected": true,
+      "collinear_anchors_rejected": true,
+      "reflection_not_silently_fit": true,
+      "nonfinite_coordinates_rejected": true
+    },
+    "passed": 7,
+    "total": 7,
+    "model_tested": false,
+    "holdout_error_synthetic_units": 9.106319693313691e-14
+  },
+  "client_command": "python drawn-to-scale/spike/check_probe.py",
+  "client": {
+    "kind": "local_client_validation_only",
+    "checks": {
+      "hand_authored_fixture_valid": true,
+      "unexpected_field_rejected": true,
+      "missing_required_field_rejected": true,
+      "bad_semantic_reference_or_geometry_rejected": true,
+      "bad_type_or_enum_rejected": true,
+      "default_reads_no_key_and_sends_no_request": true
+    },
+    "passed": 6,
+    "total": 6,
+    "model_calls": 0
+  },
+  "live_model_calls": 0,
+  "product_gate": "NOT_TESTED"
+}

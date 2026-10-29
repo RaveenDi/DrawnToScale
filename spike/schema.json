@@ -1,0 +1,118 @@
+{
+  "title": "sketch_graph",
+  "type": "object",
+  "properties": {
+    "north_direction": {
+      "type": "string",
+      "enum": [
+        "up",
+        "right",
+        "down",
+        "left",
+        "unknown"
+      ]
+    },
+    "landmarks": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "maxLength": 40
+          },
+          "label": {
+            "type": "string",
+            "maxLength": 120
+          },
+          "type": {
+            "type": "string",
+            "maxLength": 60
+          },
+          "x": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 1
+          },
+          "y": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 1
+          },
+          "evidence": {
+            "type": "string",
+            "maxLength": 250
+          }
+        },
+        "required": [
+          "id",
+          "label",
+          "type",
+          "x",
+          "y",
+          "evidence"
+        ],
+        "additionalProperties": false
+      },
+      "maxItems": 12,
+      "minItems": 0
+    },
+    "relations": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "from_id": {
+            "type": "string",
+            "maxLength": 40
+          },
+          "to_id": {
+            "type": "string",
+            "maxLength": 40
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "connected_to",
+              "near",
+              "north_of",
+              "south_of",
+              "east_of",
+              "west_of",
+              "unknown"
+            ]
+          },
+          "evidence": {
+            "type": "string",
+            "maxLength": 250
+          }
+        },
+        "required": [
+          "from_id",
+          "to_id",
+          "kind",
+          "evidence"
+        ],
+        "additionalProperties": false
+      },
+      "maxItems": 20,
+      "minItems": 0
+    },
+    "unresolved": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "maxLength": 250
+      },
+      "maxItems": 12,
+      "minItems": 0
+    }
+  },
+  "required": [
+    "north_direction",
+    "landmarks",
+    "relations",
+    "unresolved"
+  ],
+  "additionalProperties": false
+}

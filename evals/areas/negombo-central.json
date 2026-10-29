@@ -1,0 +1,15 @@
+{
+  "name": "Central Negombo — provisional first test area",
+  "area": {
+    "west": 79.823,
+    "south": 7.199,
+    "east": 79.848,
+    "north": 7.222
+  },
+  "selection": "User chose Negombo. This smaller central area is an implementation assumption; adjust it to the actual sketch.",
+  "location_source": "https://www.openstreetmap.org/node/2064194449",
+  "location_source_checked": "2026-10-29",
+  "attribution": "© OpenStreetMap contributors",
+  "license_url": "https://www.openstreetmap.org/copyright",
+  "coverage_status": "2026-10-29: retrieved 259 named features. Coverage and intended landmark identity still require manual inspection."
+}

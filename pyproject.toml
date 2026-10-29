@@ -1,0 +1,16 @@
+[project]
+name = "drawn-to-scale"
+version = "0.1.0"
+description = "Reviewable sketch-to-map feasibility core"
+requires-python = ">=3.12"
+dependencies = [
+  "fastapi", "pydantic>=2", "numpy", "pyproj", "Pillow", "httpx",
+  "uvicorn", "python-dotenv", "python-multipart",
+]
+
+[project.optional-dependencies]
+dev = ["pytest"]
+
+[tool.pytest.ini_options]
+pythonpath = ["apps/api"]
+testpaths = ["apps/api/tests"]

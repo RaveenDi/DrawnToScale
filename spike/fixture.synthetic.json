@@ -1,0 +1,17 @@
+{
+  "north_direction": "unknown",
+  "landmarks": [
+    {
+      "id": "p1",
+      "label": "School",
+      "type": "building",
+      "x": 0.2,
+      "y": 0.3,
+      "evidence": "Synthetic supplied label"
+    }
+  ],
+  "relations": [],
+  "unresolved": [
+    "This is a hand-authored validator fixture, not model output."
+  ]
+}

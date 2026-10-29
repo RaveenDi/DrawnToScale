@@ -1,0 +1,79 @@
+{
+  "manifest": {
+    "provider": "OpenStreetMap / Overpass",
+    "attribution": "© OpenStreetMap contributors",
+    "license_url": "https://www.openstreetmap.org/copyright",
+    "retrieved_at": "2026-10-29T06:11:57.990812+00:00",
+    "cached": false,
+    "query_sha256": "0a9f54dd6e959b60850d6c5a3986b0b8c1989263179b07cc6adb38ad382e4f9f",
+    "snapshot_sha256": "85293937de4d530f736ee7ee2ad7988af63d4ce8c91d10322ecc2f7863c55577",
+    "candidate_count": 259,
+    "note": "Named features only. Way/relation positions are bounding-box centers, not entrances. Coverage is unverified."
+  },
+  "candidates": [
+    {
+      "id": "osm:way/1472442017",
+      "label": "St. Mary's Church, Grand Street",
+      "aliases": [
+        "Kościół pw. NMP"
+      ],
+      "type": "place_of_worship",
+      "longitude": 79.8373476,
+      "latitude": 7.2101915,
+      "source_url": "https://www.openstreetmap.org/way/1472442017",
+      "position_kind": "bounding_box_center"
+    },
+    {
+      "id": "osm:way/321154858",
+      "label": "Clock Tower",
+      "aliases": [],
+      "type": "landmark",
+      "longitude": 79.8319342,
+      "latitude": 7.2089348,
+      "source_url": "https://www.openstreetmap.org/way/321154858",
+      "position_kind": "bounding_box_center"
+    },
+    {
+      "id": "osm:way/433807374",
+      "label": "Sri Sitthi Vinayagar Temple",
+      "aliases": [],
+      "type": "place_of_worship",
+      "longitude": 79.8383642,
+      "latitude": 7.2146786,
+      "source_url": "https://www.openstreetmap.org/way/433807374",
+      "position_kind": "bounding_box_center"
+    },
+    {
+      "id": "osm:node/5312110721",
+      "label": "fish market",
+      "aliases": [
+        "marché aux poissons"
+      ],
+      "type": "seafood",
+      "longitude": 79.8290533,
+      "latitude": 7.2031951,
+      "source_url": "https://www.openstreetmap.org/node/5312110721",
+      "position_kind": "node"
+    },
+    {
+      "id": "osm:way/706504874",
+      "label": "Fish Market",
+      "aliases": [],
+      "type": "landmark",
+      "longitude": 79.830441,
+      "latitude": 7.2070712,
+      "source_url": "https://www.openstreetmap.org/way/706504874",
+      "position_kind": "bounding_box_center"
+    },
+    {
+      "id": "osm:way/227960848",
+      "label": "St. Mary's College, Negombo",
+      "aliases": [],
+      "type": "college",
+      "longitude": 79.8366763,
+      "latitude": 7.2102832,
+      "source_url": "https://www.openstreetmap.org/way/227960848",
+      "position_kind": "bounding_box_center"
+    }
+  ]
+}

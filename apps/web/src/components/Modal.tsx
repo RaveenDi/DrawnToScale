@@ -1,0 +1,19 @@
+import {useEffect, useRef} from 'react'
+import type {ReactNode} from 'react'
+import {X} from 'lucide-react'
+
+export default function Modal({title, eyebrow, children, onClose, wide = false}: {
+  title: string; eyebrow?: string; children: ReactNode; onClose: () => void; wide?: boolean
+}) {
+  const ref = useRef<HTMLDialogElement>(null)
+  useEffect(() => {
+    const dialog = ref.current!
+    dialog.showModal()
+    return () => {dialog.close()}
+  }, [])
+  return <dialog ref={ref} className={`modal ${wide ? 'modal-wide' : ''}`} onCancel={e => {e.preventDefault(); onClose()}} aria-label={title}>
+    <div className="modal-header"><div>{eyebrow && <span className="eyebrow">{eyebrow}</span>}<h2>{title}</h2></div>
+      <button className="icon-button" onClick={onClose} aria-label="Close dialog"><X size={19}/></button></div>
+    {children}
+  </dialog>
+}

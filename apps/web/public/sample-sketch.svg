@@ -1,0 +1,45 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="700" height="850" viewBox="0 0 700 850">
+ <defs>
+  <pattern id="paper" width="24" height="24" patternUnits="userSpaceOnUse"><circle cx="1" cy="1" r=".65" fill="#bcb9ab" opacity=".45"/></pattern>
+  <filter id="pencil"><feTurbulence baseFrequency=".025" numOctaves="2" seed="8" result="noise"/><feDisplacementMap in="SourceGraphic" in2="noise" scale="1.5"/></filter>
+ </defs>
+ <rect width="700" height="850" fill="#e9e7dd"/><rect x="16" y="16" width="668" height="818" rx="2" fill="url(#paper)"/>
+ <g fill="#444a40" font-family="Segoe Print, Comic Sans MS, cursive">
+  <text x="48" y="65" font-size="29" transform="rotate(-3 48 65)">a little bit of Negombo</text>
+  <path d="M48 78Q170 72 365 77" stroke="#73786a" fill="none"/>
+  <text x="48" y="104" font-size="14" opacity=".7">the places I remember</text>
+ </g>
+ <g fill="none" stroke="#646b5d" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" filter="url(#pencil)">
+  <path d="M70 165C105 240 93 291 108 350S113 453 93 520S64 641 98 714S135 779 123 811" stroke="#899486" stroke-width="3"/>
+  <path d="M48 167C83 242 71 293 86 352S91 455 71 522S42 643 76 716S113 781 101 813" stroke="#899486" stroke-width="2"/>
+  <path d="M160 740Q186 610 212 481L232 408Q356 390 473 370Q522 344 533 297L526 168"/>
+  <path d="M175 743Q201 612 227 485L246 422Q362 405 475 385Q537 354 547 300L540 168"/>
+  <path d="M245 425Q348 509 415 582L480 655"/>
+  <path d="M251 414Q358 498 425 572L491 647"/>
+  <path d="M125 658Q145 642 181 646"/>
+  <path d="M129 671Q154 655 178 660"/>
+  <path d="M248 408Q245 309 295 255L360 216" stroke-width="2"/>
+  <path d="M259 406Q255 316 306 264L368 226" stroke-width="2"/>
+ </g>
+ <g stroke="#414a3b" fill="none" stroke-width="2.7" stroke-linejoin="round" filter="url(#pencil)">
+  <g transform="translate(480 312)"><path d="M-27 20V-19H26V20M-35-19L0-43L34-19M-7 20V0H7V20M0-43V-60M-8-52H8"/><path d="M-32 22H32"/></g>
+  <g transform="translate(207 381)"><path d="M-12 21V-26H12V21M-18 23H19M-17-26L0-44L17-26"/><circle cy="-13" r="8"/><path d="M0-19V-13L5-10"/></g>
+  <g transform="translate(510 102)"><path d="M-29 25H29M-23 22V0H23V22M-29 0H29L19-11H-19ZM-18-12H18L10-25H-10ZM-10-25H10L0-37Z"/><path d="M-6 22V8H6V22"/></g>
+  <g transform="translate(163 635)"><path d="M-30 17V-14H30V17M-34-14L-22-30H22L34-14M-23 17V-4H22V17"/><path d="M-34-14Q-25-2-17-14Q-8-2 0-14Q8-2 17-14Q25-2 34-14"/></g>
+  <g transform="translate(454 588)"><path d="M-19 21V-2H20V21M-25-2L-15-17H14L26-2"/><circle cx="-8" cy="7" r="5"/><circle cx="4" cy="7" r="5"/></g>
+  <path d="M620 79V137M612 94L620 78L628 94"/>
+ </g>
+ <g fill="#434b3c" font-family="Segoe Print, Comic Sans MS, cursive" font-size="20">
+  <text x="435" y="396" transform="rotate(-4 435 396)">St. Mary's</text><text x="453" y="422" font-size="18">Church</text>
+  <text x="126" y="447" transform="rotate(-5 126 447)">clock tower</text>
+  <text x="420" y="180" font-size="17">Sri Sitthi</text><text x="410" y="204" font-size="17">Vinayagar temple</text>
+  <text x="114" y="713" transform="rotate(4 114 713)">fish market</text>
+  <text x="408" y="651" transform="rotate(-5 408 651)">coconut stall</text><text x="506" y="679" font-size="26">?</text>
+  <text x="610" y="65" font-size="19">N</text>
+  <text x="39" y="500" font-size="16" transform="rotate(-87 39 500)" fill="#778474">water</text>
+  <text x="310" y="383" font-size="14" transform="rotate(-6 310 383)" opacity=".7">main road</text>
+ </g>
+ <path d="M387 716Q437 701 478 709" stroke="#7b8073" fill="none" stroke-dasharray="3 5"/>
+ <text x="382" y="745" fill="#747c6b" font-family="Segoe Print, Comic Sans MS, cursive" font-size="15" transform="rotate(-4 382 745)">somewhere around here...</text>
+ <text x="46" y="816" fill="#8b8d81" font-family="sans-serif" font-size="11" letter-spacing="2">ILLUSTRATIVE SAMPLE · NOT TO SCALE</text>
+</svg>
