@@ -12,5 +12,5 @@ dependencies = [
 dev = ["pytest"]
 
 [tool.pytest.ini_options]
-pythonpath = ["apps/api"]
+pythonpath = ["apps/api", "."]
 testpaths = ["apps/api/tests"]

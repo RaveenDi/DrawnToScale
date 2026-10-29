@@ -9,3 +9,5 @@ private/
 dist/
 node_modules/
 *.tsbuildinfo
+evals/reports/*
+!evals/reports/.gitkeep

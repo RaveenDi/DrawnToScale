@@ -1,0 +1,58 @@
+{
+  "synthetic": true,
+  "image": {
+    "width": 1200,
+    "height": 900
+  },
+  "north_direction": "up",
+  "intended_osm_ids": {
+    "p1": "osm:way/196057979",
+    "p2": "osm:way/581075989",
+    "p3": "osm:node/1268340441",
+    "p4": "osm:way/97913613",
+    "p5": "osm:way/1472244684"
+  },
+  "landmarks": [
+    {
+      "id": "p1",
+      "label": "Dutch Fort",
+      "type": "fort",
+      "x": 0.8764,
+      "y": 0.5958,
+      "evidence": "Handwritten label \"Dutch Fort\" next to a drawn marker (mirrored sketch)."
+    },
+    {
+      "id": "p2",
+      "label": "Arpico Super Market",
+      "type": "supermarket",
+      "x": 0.3954,
+      "y": 0.6616,
+      "evidence": "Handwritten label \"Arpico Super Market\" next to a drawn marker (mirrored sketch)."
+    },
+    {
+      "id": "p3",
+      "label": "Maris Stella",
+      "type": "school",
+      "x": 0.2026,
+      "y": 0.3521,
+      "evidence": "Handwritten label \"Maris Stella\" next to a drawn marker (mirrored sketch)."
+    },
+    {
+      "id": "p4",
+      "label": "Bus Terminal",
+      "type": "bus_station",
+      "x": 0.4784,
+      "y": 0.7918,
+      "evidence": "Handwritten label \"Bus Terminal\" next to a drawn marker (mirrored sketch)."
+    },
+    {
+      "id": "p5",
+      "label": "St Sebastian Church",
+      "type": "church",
+      "x": 0.5605,
+      "y": 0.0793,
+      "evidence": "Handwritten label \"St Sebastian Church\" next to a drawn marker (mirrored sketch)."
+    }
+  ],
+  "note": "Synthetic trap: the demo sketch drawn as a mirror image (east-west reflected). Same places, so ground truth is unchanged; a similarity fit cannot absorb a reflection."
+}

@@ -17,11 +17,12 @@ class MockProvider:
     configured = True
     name = "mock"
     model = MOCK_MODEL
+    layout = "demo-sketch"  # fixture name under evals/fixtures; the eval harness switches it per manifest item (mock only)
 
     def extract(self, image, context):
-        layout = json.loads((FIXTURES / "demo-sketch.json").read_text(encoding="utf-8"))
+        layout = json.loads((FIXTURES / f"{self.layout}.json").read_text(encoding="utf-8"))
         graph = SketchGraph(north_direction=layout["north_direction"], landmarks=layout["landmarks"], relations=[],
-                            unresolved=["MOCK MODE: this is the canned demo-sketch layout, whatever image was uploaded."])
+                            unresolved=[f"MOCK MODE: this is the canned {self.layout} layout, whatever image was uploaded."])
         return graph, {"provider": "mock", "live": False}
 
     def match(self, graph, shortlist, hint=None):
