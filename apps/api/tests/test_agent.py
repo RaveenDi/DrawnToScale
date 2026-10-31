@@ -151,27 +151,20 @@ def test_provider_failure_first_turn_fails_run_but_later_turn_keeps_partial(tmp_
     assert "timeout" in run["agent"]["detail"] and all(p["candidate_id"] is None for p in run["proposals"])
 
 
-def test_recovery_happens_once_and_geometry_failure_abstains(graph, candidates):
-    verdicts, script = [], [searches(), decide(),
-                            turn(("propose_match", {"sketch_id": "p1", "candidate_id": "synthetic:0", "evidence": "again"}),
-                                 ("propose_match", {"sketch_id": "p1", "candidate_id": None, "evidence": "give up"}), ("finish", {})),
-                            searches()]
+@pytest.mark.parametrize("status,reason", [("needs_review", "loose_fit"), ("rejected", "reflected"),
+                                          ("rejected", "collinear"), ("needs_review", "too_few")])
+def test_geometry_verdict_keeps_model_suggestions(graph, candidates, status, reason):
+    script = [batch_decide()]
     class Provider:
         def agent_turn(self, system, transcript, tools):
-            self.last = transcript
             return script.pop(0)
-    def verify(rows):
-        verdicts.append(rows)
-        return {"status": "rejected", "outliers": ["p1"], "fit_residuals_m": {"p1": 400.0}}
-    provider, steps = Provider(), []
-    agent = MatchAgent(provider, MatchTools(graph, candidates), settings=Settings(), verify=verify, charge=lambda: None,
-                       calls_left=lambda: 99, record=steps.append, model="m")
-    outcome = agent.run(graph)
-    assert outcome.status == "completed" and outcome.recovered and len(verdicts) == 2 and len(script) == 1  # no third round
-    feedback = next(m for m in provider.last if m["role"] == "user" and "verifier_feedback" in m["content"])
-    assert json.loads(feedback["content"])["verifier_feedback"]["rejected_candidate_ids_by_sketch_id"] == {"p1": ["synthetic:0"]}
-    assert outcome.proposals[0]["candidate_id"] is None and "failed twice" in outcome.proposals[0]["evidence"]
-    assert [s["status"] for s in steps if s["kind"] == "tool_call" and s["tool"] == "propose_match"].count("tool_error") == 1
+    verdict = {"status": status, "reason": reason, "outliers": ["p1"], "fit_residuals_m": {"p1": 400.0}}
+    outcome = MatchAgent(Provider(), MatchTools(graph, candidates), settings=Settings(),
+                         verify=lambda rows: verdict, charge=lambda: None, calls_left=lambda: 99,
+                         record=lambda step: None, model="mock").run(graph)
+    assert outcome.status == "completed" and not outcome.recovered
+    assert [p["candidate_id"] for p in outcome.proposals] == ["synthetic:0", "synthetic:1", "synthetic:2", None]
+    assert outcome.summary()["verification"] == verdict
 
 
 def test_meta_provider_wire_shape_and_telemetry(tmp_path, graph):
@@ -234,6 +227,7 @@ def test_searching_model_finalizes_on_last_turn_with_reserved_capacity(graph, ca
     assert outcome.status == "completed" and outcome.steps == 8 and outcome.tool_calls == 64
     assert [c["turns_left"] for c in contexts] == list(range(8, 0, -1))
     assert "Finalize every undecided landmark" in contexts[-2]["instruction"]
+    assert sum("candidate_shortlists" in c for c in contexts) == 1
     assert sum(p["candidate_id"] is not None for p in outcome.proposals) == 3
 
 
@@ -297,4 +291,27 @@ def test_verifier_rejection_reason_is_stored(tmp_path, providers, image_bytes, a
     rejection = run["agent"]["verifier_rejections"][0]
     assert rejection["reason"] and rejection["status"] == "rejected"
     assert any(rejection["reason"] in s["output_summary"] for s in trace["steps"] if s["agent"] == "Verifier")
-    assert all(p["candidate_id"] is None for p in run["proposals"])
+    assert sum(p["candidate_id"] is not None for p in run["proposals"]) == 3
+
+
+def test_shortlists_are_resent_only_after_change(graph, candidates):
+    contexts = []
+    tools = MatchTools(graph, candidates)
+    original = tools.shortlists
+    calls = 0
+    def shortlists():
+        nonlocal calls
+        calls += 1
+        result = original()
+        if calls >= 3:
+            result["p1"][0]["distance_after_fit_m"] = 123.0
+        return result
+    tools.shortlists = shortlists
+    class Provider:
+        def agent_turn(self, system, transcript, specs):
+            contexts.append(json.loads(transcript[-1]["content"]))
+            return batch_decide() if len(contexts) == 4 else searches()
+    MatchAgent(Provider(), tools, settings=Settings(), verify=lambda rows: {"status": "pass", "outliers": []},
+               charge=lambda: None, calls_left=lambda: 99, record=lambda step: None, model="mock").run(graph)
+    assert ["candidate_shortlists" in c for c in contexts] == [True, False, True, False]
+    assert contexts[2]["candidate_shortlists"]["p1"][0]["distance_after_fit_m"] == 123.0

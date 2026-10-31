@@ -52,3 +52,20 @@ Record extraction precision/recall, proposed/corrected matches, correction count
 The planning gate requires at least 80% named-landmark precision and recall; at least three of five sketches (including one held out) with three correct matches within 100 m and no more than two corrections each; abstention on ambiguity; and honestly measured completion time. The 100 m threshold is a spike threshold, not navigation or survey accuracy.
 
 Current status: **NOT TESTED**. Real model input and local credentials are pending.
+
+
+### Raw versus verified proposals
+
+New JSON and Markdown reports include `raw_proposal_accuracy` and
+`verified_accuracy` per sketch and in the micro-aggregate. Both use all labelled
+landmarks with an OSM ID as the denominator. Raw scoring uses the model's final
+suggestions, which verification no longer deletes. Verified scoring admits
+suggestions only when the entire anchor set has a `pass` verdict; review-required,
+rejected, or absent verdicts contribute abstentions. Verified does not mean
+human-confirmed or ground-truth correct. JSON includes full `raw_score` and
+`verified_score` outcomes per item and `raw`/`verified` aggregate metrics;
+legacy `score` and aggregate `match_accuracy` now describe raw proposals.
+Historical reports are unchanged and cannot recover erased proposals without
+separate recording analysis. No new live accuracy or cost reduction has been
+measured. Shortlists are appended to model context on the first turn and only
+when changed; the API still resends conversation history on subsequent calls.

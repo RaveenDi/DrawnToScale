@@ -149,18 +149,19 @@ class Workflow:
 
     def _verify_step(self, run_id, run, graph, matches, label):
         def go():
-            result = verify(graph.model_dump(), matches, run["candidates"], run["area"], run["image"])
+            result = verify(graph.model_dump(), matches, run["candidates"], run["area"], run["image"], k=self.settings.geometry_tolerance_k)
+            self.store.update(run_id, lambda current: current.update(verification=result))
             held = result.get("held_out_error_m")
             out = f'{result["status"]}; outliers={result["outliers"]}' + (f'; held-out median {held["median"]} m' if held else "")
             if result.get("reason"):
                 out += "; reason=" + result["reason"]
-            return result, out, {"pass": "ok", "rejected": "rejected"}.get(result["status"], "skipped")
+            return result, out, {"pass": "ok", "rejected": "rejected", "needs_review": "needs_review"}.get(result["status"], "skipped")
         n = sum(1 for m in matches if m["candidate_id"])
         return self._step(run_id, "Verifier", "Deterministic geometry check (similarity fit, outliers, held-out error)",
                           "none (deterministic geometry)", f"{label}: {n} proposed anchors", go)
 
     def _agent_match(self, run_id, run, graph, history, model):
-        """Tool-calling loop: the model picks deterministic tools, the Verifier decides, one recovery."""
+        """Tool-calling loop: retain model suggestions alongside a geometry verdict."""
         tools = MatchTools(graph, [Candidate.model_validate(c) for c in run["candidates"]], area=run["area"], image=run["image"])
         charge = lambda: self.count_call(run_id)
         agent = MatchAgent(self.meta, tools, settings=self.settings, model=model, charge=charge,
@@ -172,33 +173,8 @@ class Workflow:
         return outcome.proposals, history, outcome.summary()
 
     def _verify_loop(self, run_id, run, graph, matches, history, model):
-        """Legacy fixed-Matcher path: Verifier may reject outliers; at most ONE bounded re-match (one extra model call)."""
-        check = lambda label: self._verify_step(run_id, run, graph, matches, label)
-        result = check("first pass")
-        if result["status"] != "rejected" or not result["outliers"]:
-            return matches, history
-        rejected = {s: [m["candidate_id"] for m in matches if m["sketch_id"] == s] for s in result["outliers"]}
-
-        def rematch():
-            self.count_call(run_id)
-            new, telemetry = self.meta.match(graph, run["shortlist"], hint={"rejected": rejected})
-            validate_proposals(graph, new, run["shortlist"])
-            return ({p.sketch_id: p for p in new.matches}, telemetry), f"re-evaluated {sorted(rejected)} only", "ok"
-        picked, telemetry = self._step(run_id, "Matcher", "Bounded re-match of Verifier-rejected outliers (max 1)", model,
-                                       f"outliers {sorted(rejected)}, rejected IDs excluded", rematch,
-                                       kind="model_call", prompt_version="match-v1", raw=lambda v: v[1])
-        history = [*history, {"stage": "rematch", **telemetry}]
-        for m in matches:
-            if m["sketch_id"] in rejected:
-                n = picked[m["sketch_id"]]
-                if n.candidate_id is None or n.candidate_id in rejected[m["sketch_id"]]:
-                    m.update(candidate_id=None, evidence="Verifier rejected the earlier pick; abstaining.")
-                else:
-                    m.update(candidate_id=n.candidate_id, evidence="Re-matched after geometry check. " + n.evidence)
-        final = check("after re-match")
-        for m in matches:  # still inconsistent: abstain rather than propose a geometrically rejected anchor
-            if m["sketch_id"] in final["outliers"]:
-                m.update(candidate_id=None, evidence="Geometry check failed twice; left for your decision.")
+        """Keep all legacy matcher suggestions, including hard geometry rejections."""
+        self._verify_step(run_id, run, graph, matches, "geometry check")
         return matches, history
 
 

@@ -31,8 +31,10 @@ def item(**over):
 def test_mock_demo_manifest_runs_end_to_end_and_writes_both_reports(tmp_path):
     report, base = harness.evaluate("mock", DEMO, "dev", out_dir=tmp_path, data_dir=tmp_path / "data")
     a = report["aggregate"]
-    assert (a["extraction_recall"], a["extraction_precision"], a["match_accuracy"]) == (1.0, 1.0, 1.0)
-    assert a["geo_error_m"]["max"] == 0.0 and a["telemetry"]["model_calls"] == 7 and a["telemetry"]["steps"] == 6
+    assert (a["extraction_recall"], a["extraction_precision"], a["match_accuracy"]) == (1.0, 1.0, 0.8)
+    assert a["geo_error_m"]["max"] > 0 and a["telemetry"]["model_calls"] == 4 and a["telemetry"]["steps"] == 3
+    assert a["raw_proposal_accuracy"] == 0.8
+    assert a["verified_accuracy"] == 0.8  # geometry consistency is not correctness
     assert report["meta"]["provider"] == "mock" and report["meta"]["evidence"].startswith("NONE")
     assert json.loads(base.with_suffix(".json").read_text(encoding="utf-8"))["items"][0]["id"] == "demo-synthetic-negombo"
     text = base.with_suffix(".md").read_text(encoding="utf-8")
@@ -40,18 +42,18 @@ def test_mock_demo_manifest_runs_end_to_end_and_writes_both_reports(tmp_path):
     assert base.name.endswith("-dev")
 
 
-def test_reflected_sketch_trap_is_caught_by_abstaining_not_by_guessing(tmp_path):
+def test_reflected_sketch_keeps_raw_suggestions_but_has_no_verified_matches(tmp_path):
     report, _ = harness.evaluate("mock", DEMO, "heldout", out_dir=tmp_path, data_dir=tmp_path / "data")
     a = report["aggregate"]
-    assert report["meta"]["held_out"] is True and a["wrong_match_rate"] == 0.0 and a["false_abstain_rate"] > 0
-    assert report["items"][0]["verifier_final"] in {"ok", "rejected", "skipped"}
+    assert report["meta"]["held_out"] is True and a["raw_proposal_accuracy"] == 0.8 and a["verified_accuracy"] == 0.0
+    assert report["items"][0]["verifier_final"] in {"ok", "rejected", "needs_review", "skipped"}
 
 
 def test_call_cap_skips_items_it_cannot_afford(tmp_path):
     manifest = write_manifest(tmp_path / "m.jsonl", item(id="one"), item(id="two"))
-    report, _ = harness.evaluate("mock", manifest, "dev", max_calls=8, out_dir=tmp_path, data_dir=tmp_path / "data")
+    report, _ = harness.evaluate("mock", manifest, "dev", max_calls=4, out_dir=tmp_path, data_dir=tmp_path / "data")
     assert [r["id"] for r in report["items"]] == ["one"] and report["meta"]["items_skipped_for_call_cap"] == ["two"]
-    assert report["meta"]["calls_used"] == 7 <= 8
+    assert report["meta"]["calls_used"] == 4
 
 
 def test_heldout_may_only_be_reported_once_for_a_real_provider(tmp_path):
@@ -232,3 +234,16 @@ def test_replay_loads_nonsecret_model_settings_and_matches_recording(tmp_path, m
     actual, telemetry = replay.extract(image_bytes, "")
     assert actual == expected and telemetry["replayed"]
     assert replay.key == "" and replay.client is None and geography.offline
+
+
+@pytest.mark.parametrize("status", ["pass", "needs_review", "rejected"])
+def test_raw_and_verified_scores_are_separate(status):
+    run = {"candidates": [{"id": "osm:node/1", "longitude": 80, "latitude": 7}],
+           "graph": {"landmarks": [{"id": "p1", "label": "Park"}]},
+           "proposals": [{"sketch_id": "p1", "candidate_id": "osm:node/1"}],
+           "verification": {"status": status}, "status": "needs_confirmation", "model_calls": 0}
+    result = harness.item_result(item(ground_truth={"Park": "node/1"}), run)
+    assert result["raw_proposal_accuracy"] == 1.0
+    assert result["verified_accuracy"] == (1.0 if status == "pass" else 0.0)
+    assert result["raw_score"]["rows"][0]["proposed"] == "osm:node/1"
+    assert run["proposals"][0]["candidate_id"] == "osm:node/1"

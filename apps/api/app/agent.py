@@ -1,5 +1,5 @@
 """Bounded tool-calling matching agent. The model chooses deterministic tools; the deterministic
-Verifier decides; on rejection the model gets the feedback once. Hard caps on turns, model calls,
+Verifier annotates suggestions for human review without deleting them. Hard caps on turns, model calls,
 tool calls; unknown tools and bad arguments come back as tool errors; every turn and tool call is
 a trace step. The wire format of tool calling lives in the provider (verified against the live API on 2026-10-30)."""
 from dataclasses import dataclass, field
@@ -27,10 +27,11 @@ class Outcome:
     recovered: bool
     telemetry: list = field(default_factory=list)
     verifier_rejections: list = field(default_factory=list)
+    verification: dict = field(default_factory=dict)
 
     def summary(self):
         return {"status": self.status, "detail": self.detail, "steps": self.steps, "tool_calls": self.tool_calls,
-                "recovered": self.recovered, "verifier_rejections": self.verifier_rejections,
+                "verification": self.verification, "recovered": self.recovered, "verifier_rejections": self.verifier_rejections,
                 "abstained": [p["sketch_id"] for p in self.proposals if not p["candidate_id"]]}
 
 
@@ -60,9 +61,11 @@ class MatchAgent:
         self.provider, self.tools, self.settings = provider, tools, settings
         self.verify, self.charge, self.calls_left, self.record, self.model = verify, charge, calls_left, record, model
         self.verifier_rejections = []
+        self.verification = {}
 
     def _verify(self, rows):
         verdict = self.verify(rows)
+        self.verification = verdict
         if verdict["status"] == "rejected":
             self.verifier_rejections.append(verdict)
         return verdict
@@ -73,6 +76,7 @@ class MatchAgent:
             "task": "Match every sketch landmark to a stored candidate (or abstain) using the tools.",
             "sketch": graph.model_dump(), "landmark_ids": t.sketch_ids,
             "limits": {"max_turns": s.max_steps, "max_tool_calls_per_turn": s.max_tool_calls_per_turn}}, ensure_ascii=False)}]
+        last_shortlists = None
         steps = tool_calls = invalid = 0
         recovered, status, detail, verified, outliers, telemetry = False, "completed", "", None, [], []
         while True:
@@ -83,10 +87,13 @@ class MatchAgent:
                 status, detail = "partial_call_cap", f"Model-call cap ({s.max_model_calls}) for this run reached; undecided landmarks abstain."
                 break
             turns_left = min(s.max_steps - steps, self.calls_left())
+            shortlists = t.shortlists()
+            shortlist_update = {"candidate_shortlists": shortlists} if shortlists != last_shortlists else {}
+            last_shortlists = shortlists
             transcript.append({"role": "user", "content": json.dumps({
                 "turns_left": turns_left, "undecided": t.undecided,
                 "tool_calls_left": s.max_tool_calls - tool_calls,
-                "candidate_shortlists": t.shortlists(),
+                **shortlist_update,
                 "fit_note": "Distances use a provisional fit of proposed anchors, not independent accuracy; null means no usable fit.",
                 "instruction": NUDGE + (" Finalize every undecided landmark now: decide or abstain with a reason. "
                     "Use propose_matches to commit them together, then finish; do not spend remaining turns searching."
@@ -143,16 +150,6 @@ class MatchAgent:
                 verdict = self._verify(rows)
                 verified = self._signature(rows)
                 outliers = verdict["outliers"] if verdict["status"] == "rejected" else []
-                if outliers and not recovered:
-                    recovered = True
-                    t.reject(outliers)
-                    transcript.append({"role": "user", "content": json.dumps({"verifier_feedback": {
-                        "instruction": "The deterministic geometry check rejected these picks. Re-decide ONLY these landmarks (rejected ids can no longer be proposed for them), then call finish() again.",
-                        "rejected_candidate_ids_by_sketch_id": {x: t.rejected.get(x, []) for x in outliers},
-                        "reason": verdict.get("reason"),
-                        "fit_residuals_m": verdict.get("fit_residuals_m"), "turns_left": s.max_steps - steps}}, ensure_ascii=False)})
-                    outliers = []
-                    continue
                 break
         return self._finalize(steps, tool_calls, recovered, status, detail, verified, outliers, telemetry)
 
@@ -177,17 +174,13 @@ class MatchAgent:
         if self._signature(rows) != verified:  # the loop ended early on a state the Verifier has not seen
             verdict = self._verify(rows)
             outliers = verdict["outliers"] if verdict["status"] == "rejected" else []
-        for r in rows:
-            if r["sketch_id"] in outliers:
-                r.update(candidate_id=None, evidence="Geometry check failed twice; left for your decision." if recovered
-                         else "Geometry check rejected this pick and the loop ended before it could be re-matched.")
         if status != "completed":
             self.record({"agent": "Matcher", "kind": "stop", "role": "Matching loop stopped early", "model": "none (deterministic cap)",
                          "input_summary": f"{steps} turns, {tool_calls} tool calls", "output_summary": detail,
                          "duration_ms": 0, "status": "partial" if status.startswith(("partial", "stopped")) else "abstained"})
-        elif outliers:
-            detail = f"{len(outliers)} landmark(s) abstained: geometry check failed after the one recovery."
-        return Outcome(rows, status, detail, steps, tool_calls, recovered, telemetry, self.verifier_rejections)
+        elif self.verification.get("status") != "pass":
+            detail = f"Geometry: {self.verification.get('reason', 'needs_review')}; suggestions retained for your confirmation."
+        return Outcome(rows, status, detail, steps, tool_calls, recovered, telemetry, self.verifier_rejections, self.verification)
 
     def _turn_step(self, n, started, status, summary, raw, n_messages):
         duration = round((time.monotonic() - started) * 1000)

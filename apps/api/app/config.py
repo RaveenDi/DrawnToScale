@@ -5,6 +5,7 @@ import os
 
 @dataclass(frozen=True)
 class Settings:
+    geometry_tolerance_k: float = 0.35
     max_steps: int = 8              # model turns in the matching loop
     max_model_calls: int = 16       # per run, cumulative over attempts (extraction + loop turns + JSON repairs)
     max_tool_calls_per_turn: int = 16
@@ -22,6 +23,12 @@ class Settings:
                           ("max_tool_calls", "AGENT_MAX_TOOL_CALLS")):
             if env.get(key, "").strip():
                 values[name] = int(env[key])
+        if env.get("GEOMETRY_TOLERANCE_K", "").strip():
+            import math
+            k = float(env["GEOMETRY_TOLERANCE_K"])
+            if not math.isfinite(k) or k < 0:
+                raise ValueError("GEOMETRY_TOLERANCE_K must be finite and nonnegative")
+            values["geometry_tolerance_k"] = k
         return replace(cls(), **values)
 
 

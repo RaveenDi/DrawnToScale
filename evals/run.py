@@ -134,6 +134,10 @@ def run_item(workflow, store, item, area):
 def item_result(item, run):
     candidates = {c["id"]: (c["longitude"], c["latitude"]) for c in run["candidates"]}
     scored = score.score_item(item["ground_truth"], run["graph"], run["proposals"], candidates)
+    verdict = run.get("verification") or (run.get("agent") or {}).get("verification") or {}
+    verified_proposals = run["proposals"] if verdict.get("status") == "pass" else [
+        {**p, "candidate_id": None} for p in run["proposals"]]
+    verified = score.score_item(item["ground_truth"], run["graph"], verified_proposals, candidates)
     totals = run.get("totals") or {}
     verifier = [s for s in run.get("trace", []) if s["agent"] == "Verifier"]
     return {"id": item["id"], "split": item["split"], "area": item["area"] if isinstance(item["area"], str) else "inline",
@@ -142,7 +146,11 @@ def item_result(item, run):
             "steps": totals.get("model_turns"), "tool_calls": totals.get("tool_calls"), "model_calls": run["model_calls"],
             "input_tokens": totals.get("input_tokens"), "output_tokens": totals.get("output_tokens"),
             "model_latency_ms": totals.get("model_latency_ms"), "wall_ms": totals.get("wall_ms"),
-            "est_cost_usd": totals.get("est_cost_usd"), "cost_basis": totals.get("cost_basis"), "score": scored}
+            "est_cost_usd": totals.get("est_cost_usd"), "cost_basis": totals.get("cost_basis"), "score": scored,
+            "raw_score": scored, "verified_score": verified,
+            "raw_proposal_accuracy": score.ratio(scored["correct"], scored["gt_with_id"]),
+            "verified_accuracy": score.ratio(verified["correct"], verified["gt_with_id"]),
+            "verification": verdict}
 
 
 def telemetry_summary(results):
@@ -215,13 +223,20 @@ def evaluate(provider, manifest_path, split, *, max_calls=None, out_dir=REPORTS,
         if client:
             client.close()
     scores = [r["score"] for r in results]
+    raw_metrics = score.aggregate(scores)
+    verified_metrics = score.aggregate([r["verified_score"] for r in results])
     report = {"meta": {"stamp": stamp, "provider": provider, "split": split, "manifest": manifest_path.name, "manifest_sha256": manifest_sha,
                        "git_commit": _git_commit(), "model": getattr(meta, "model", None), "max_calls": max_calls, "calls_used": used,
                        "items_run": len(results), "items_skipped_for_call_cap": skipped, "evidence": EVIDENCE[provider],
                        "caps": {k: v for k, v in settings.__dict__.items()},
                        "price_table": {m: {"verified": p["verified"], "source": p["source"]} for m, p in PRICES_USD_PER_MTOK.items()},
                        "held_out": split == "heldout"},
-              "aggregate": {**score.aggregate(scores), "telemetry": telemetry_summary(results)} if scores else None,
+              "aggregate": {**raw_metrics,
+                          "raw_proposal_accuracy": raw_metrics["match_accuracy"],
+                          "verified_accuracy": verified_metrics["match_accuracy"],
+                          "raw": raw_metrics,
+                          "verified": verified_metrics,
+                          "telemetry": telemetry_summary(results)} if scores else None,
               "items": results}
     out_dir.mkdir(parents=True, exist_ok=True)
     base = out_dir / f"{stamp}-{split}"
@@ -262,6 +277,7 @@ def markdown(report):
     t, g = a["telemetry"], a["geo_error_m"]
     lines += ["", "## Aggregate (micro-average over landmarks)", "", "| Metric | Value |", "|---|---|",
               f"| Extraction recall / precision | {pct(a['extraction_recall'])} / {pct(a['extraction_precision'])} ({a['ground_truth_landmarks']} labelled, {a['extracted_landmarks']} extracted) |",
+              f"| Raw / verified accuracy | {pct(a['raw_proposal_accuracy'])} / {pct(a['verified_accuracy'])} |",
               f"| Match accuracy (labelled with an OSM id) | {pct(a['match_accuracy'])}; wrong {pct(a['wrong_match_rate'])}, false abstain {pct(a['false_abstain_rate'])} |",
               f"| Abstain correctness (labelled unknown) | {pct(a['abstain_correctness'])}; false match {pct(a['false_match_on_unknown'])} |",
               f"| Geographic error vs ground truth ({'held-out' if m['held_out'] else m['split']}) | " + (f"median {g['median']} m, mean {g['mean']} m, p90 {g['p90']} m, max {g['max']} m (n={g['n']})" if g else "n/a") + " |",
@@ -275,6 +291,10 @@ def markdown(report):
         s = r["score"]
         lines.append(f"| {r['id']} | {r['run_status']}{' (' + r['error'] + ')' if r['error'] else ''} | {(r['agent'] or {}).get('status', 'n/a')} | {pct(s['extraction_recall'])} | {pct(s['extraction_precision'])} | "
                      f"{s['correct']}/{s['gt_with_id']} | {s['wrong_match']} | {s['false_abstain']} | {s['correct_abstain']}/{s['gt_null_extracted']} | {s['false_match']} | {r['model_calls']} |")
+    lines += ["", "Verified means the entire anchor set passed geometry; it does not mean human-confirmed or ground-truth correct.",
+              "", "| Item | Raw proposal accuracy | Verified accuracy |", "|---|---|---|"]
+    for r in report["items"]:
+        lines.append(f"| {r['id']} | {pct(r['raw_proposal_accuracy'])} | {pct(r['verified_accuracy'])} |")
     lines += ["", "## Per-landmark outcomes", "", "| Item | Label | Truth | Proposed | Outcome | Error (m) |", "|---|---|---|---|---|---|"]
     for r in report["items"]:
         for row in r["score"]["rows"]:

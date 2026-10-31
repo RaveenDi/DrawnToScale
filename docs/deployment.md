@@ -35,3 +35,16 @@ Other caps (config.py): 16 tool calls per turn, 2 consecutive unusable turns, 2 
 - Run **one process** (no `--workers`): the worker is in-process and state is local.
 - Data lives in `/app/private`; the compose file mounts a volume there. Add retention and auth before a public host.
 - Live Meta endpoint shapes are **UNVERIFIED** until the real-model gate runs. The image has been built and started only where stated in the README status.
+
+
+### Sketch geometry tolerance
+
+`GEOMETRY_TOLERANCE_K` sets the nonnegative, finite scale factor (default `0.35`).
+The tolerance is `max(50 m, k * median pairwise target-anchor distance)` and is
+recorded in the verification verdict. Three-anchor reflection detection compares
+signed triangle orientations; larger sets use the majority of nondegenerate
+corresponding triangles so one outlier does not imply a whole-layout reflection.
+`reflected` and `collinear` block fitting. `loose_fit` retains the transform and
+residuals with `needs_review`; `too_few` requests more anchors. Every model
+suggestion survives verification and still requires the person's confirmation.
+Geometry consistency is not evidence that a proposed landmark is correct.

@@ -71,7 +71,8 @@ def test_recorded_tool_calling_loop_replays_and_tool_results_use_the_verified_wi
     assert picked == {"st_sebastian_church": "osm:way/1472244684", "maris_stella": "osm:node/1268340441", "dutch_fort": "osm:way/196057979",
                        "arpico_super_market": "osm:way/581075989", "bus_terminal": "osm:way/97913613"}
     # the deterministic geometry check then judged the picks against the model's own (imprecise) sketch coordinates
-    assert sorted(outcome.summary()["abstained"]) == ["arpico_super_market", "dutch_fort"]
+    assert outcome.summary()["abstained"] == []
+    assert {p["sketch_id"]: p["candidate_id"] for p in outcome.proposals} == picked
     turns = seen[1:]
     assert len(turns) == 4
     for body in turns:
