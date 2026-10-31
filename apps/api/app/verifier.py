@@ -37,6 +37,7 @@ def verify(graph, proposals, candidates, area, image):
             continue
         held.append(float(np.linalg.norm(apply_transform(src[i:i + 1], p)[0] - dst[i])))
     return {"status": "rejected" if outliers else "pass", "anchors": len(ids), "outliers": outliers,
+            "reason": f"Proposed anchors exceed the {TOLERANCE_M:g} m fit tolerance." if outliers else None,
             "tolerance_m": TOLERANCE_M, "fit_residuals_m": {s: round(float(e), 1) for s, e in zip(ids, errors)},
             "held_out_error_m": {"median": round(float(np.median(held)), 1), "max": round(max(held), 1)} if held else None,
             "note": "Self-consistency of proposals, not ground-truth accuracy."}

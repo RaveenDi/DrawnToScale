@@ -3,10 +3,12 @@ every coordinate comes from stored OSM candidates, and every bad call becomes a 
 can read, never an exception."""
 import json
 
+import numpy as np
 from pydantic import Field, ValidationError
-from pyproj import Geod
+from pyproj import CRS, Geod, Transformer
 
 from .contracts import Contract, Identifier
+from .geometry import apply_transform, robust_fit
 from .providers import rank_candidates
 
 
@@ -34,6 +36,10 @@ class FinishArgs(Contract):
     pass
 
 
+class BatchArgs(Contract):
+    matches: list[ProposeArgs] = Field(min_length=1, max_length=12)
+
+
 # Provider-neutral tool specs (JSON Schema). The provider turns these into its wire format.
 TOOL_SPECS = [
     {"name": "search_candidates",
@@ -46,15 +52,18 @@ TOOL_SPECS = [
      "description": "Geodesic distance in metres between two stored candidates. Use it to sanity-check that proposed matches are plausible relative to each other.",
      "parameters": DistanceArgs.model_json_schema()},
     {"name": "propose_match",
-     "description": "Record your decision for ONE sketch landmark: a candidate id returned by search_candidates, or null to abstain (unmapped, ambiguous or unknown). Evidence: short reason (max 250 chars). Calling it again for the same sketch_id replaces the earlier decision.",
+     "description": "Record your decision for ONE sketch landmark: a candidate id shown in a shortlist or returned by search_candidates/get_candidate, or null to abstain (unmapped, ambiguous or unknown). Evidence: short reason (max 250 chars). Calling it again for the same sketch_id replaces the earlier decision.",
      "parameters": ProposeArgs.model_json_schema()},
     {"name": "finish",
      "description": "End the task once every sketch landmark has a decision (a candidate id or null). A deterministic geometry check then runs and may send feedback.",
      "parameters": FinishArgs.model_json_schema()},
+    {"name": "propose_matches",
+     "description": "Commit several landmark decisions in one call. Each decision uses a shown candidate id or null with a reason. Returns individual validation results; valid decisions are kept. Call finish afterward.",
+     "parameters": BatchArgs.model_json_schema()},
 ]
 TOOL_NAMES = [t["name"] for t in TOOL_SPECS]
 _ARGS = {"search_candidates": SearchArgs, "get_candidate": GetArgs, "distance_between": DistanceArgs,
-         "propose_match": ProposeArgs, "finish": FinishArgs}
+         "propose_match": ProposeArgs, "propose_matches": BatchArgs, "finish": FinishArgs}
 
 
 def fail(message):
@@ -66,7 +75,8 @@ def error_summary(exc):
 
 
 class MatchTools:
-    def __init__(self, graph, candidates):
+    def __init__(self, graph, candidates, *, area=None, image=None):
+        self.graph, self.area, self.image = graph, area, image
         self.sketch_ids = [p.id for p in graph.landmarks]
         self.pool = {c.id: c for c in candidates}
         self.seen = set()          # candidate IDs the model has actually been shown
@@ -74,6 +84,31 @@ class MatchTools:
         self.rejected = {}         # sketch_id -> candidate IDs the Verifier rejected
         self.finished = False
         self.geod = Geod(ellps="WGS84")
+
+    def shortlists(self):
+        """Shown candidates plus advisory distances from the current provisional fit, never model coordinates."""
+        projected, predicted = {}, {}
+        picks = [(s, p["candidate_id"]) for s, p in self.proposals.items() if p["candidate_id"]]
+        if self.area and self.image and len(picks) >= 3:
+            a = self.area
+            local = CRS.from_proj4(f"+proj=aeqd +lat_0={(a['south'] + a['north']) / 2} "
+                                  f"+lon_0={(a['west'] + a['east']) / 2} +datum=WGS84 +units=m")
+            projection = Transformer.from_crs("EPSG:4326", local, always_xy=True)
+            projected = {c.id: projection.transform(c.longitude, c.latitude) for c in self.pool.values()}
+            points = {p.id: [p.x * self.image['width'], -p.y * self.image['height']] for p in self.graph.landmarks}
+            try:
+                params, _, _ = robust_fit([points[s] for s, _ in picks], [projected[c] for _, c in picks])
+                predicted = {s: apply_transform([xy], params)[0] for s, xy in points.items()}
+            except ValueError:
+                pass  # no usable fit: distances remain explicitly unavailable
+        result = {}
+        for p in self.graph.landmarks:
+            found = rank_candidates(p.label, self.pool.values())
+            self.seen.update(c.id for c in found)
+            result[p.id] = [{"id": c.id, "label": c.label, "type": c.type, "aliases": c.aliases[:3],
+                             "distance_after_fit_m": round(float(np.linalg.norm(predicted[p.id] - projected[c.id])), 1)
+                             if p.id in predicted else None} for c in found]
+        return result
 
     @property
     def undecided(self):
@@ -136,7 +171,7 @@ class MatchTools:
             if a.candidate_id not in self.pool:
                 return fail("candidate_id is not a stored candidate. Use only ids returned by search_candidates, or null.")
             if a.candidate_id not in self.seen:
-                return fail("candidate_id was not returned by a search_candidates/get_candidate call in this run. Search first.")
+                return fail("candidate_id was not shown in a shortlist or returned by a search_candidates/get_candidate call in this run. Inspect candidates first.")
             if a.candidate_id in self.rejected.get(a.sketch_id, []):
                 return fail("The geometry check rejected this candidate for this landmark. Choose another or null.")
             clash = next((s for s, p in self.proposals.items() if s != a.sketch_id and p["candidate_id"] == a.candidate_id), None)
@@ -146,6 +181,10 @@ class MatchTools:
         self.proposals[a.sketch_id] = {"candidate_id": a.candidate_id, "evidence": a.evidence[:250]}
         out = {"ok": True, "recorded": {"sketch_id": a.sketch_id, "candidate_id": a.candidate_id}, "undecided": self.undecided}
         return {**out, "note": note} if note else out
+
+    def _propose_matches(self, a):
+        results = [self._propose_match(p) for p in a.matches]
+        return {"ok": all(r["ok"] for r in results), "results": results, "undecided": self.undecided}
 
     def _finish(self, a):
         if self.undecided:

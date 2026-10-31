@@ -84,16 +84,17 @@ def test_bad_tool_calls_become_tool_errors_not_crashes(tmp_path, providers, imag
     meta, run, trace = run_with(tmp_path, meta.graph, geography, script, image_bytes, area)
     assert run["status"] == "needs_confirmation" and run["agent"]["status"] == "completed"
     errors = [s for s in tool_steps(trace) if s["status"] == "tool_error"]
-    assert len(errors) == 8
+    assert len(errors) == 7
     results = {m["tool_call_id"]: json.loads(m["content"]) for m in meta.transcripts[1] if m["role"] == "tool"}
-    messages = " | ".join(r["error"] for r in results.values())
-    for fragment in ("Unknown tool", "not valid JSON", "Invalid arguments", "not returned by a search", "not a stored candidate", "Valid ids", "Cannot finish"):
+    messages = " | ".join(r["error"] for r in results.values() if not r["ok"])
+    for fragment in ("Unknown tool", "not valid JSON", "Invalid arguments", "not a stored candidate", "Valid ids", "Cannot finish"):
         assert fragment in messages
     assert "latitude" in messages  # extra fields (a model-supplied coordinate) are rejected by the strict contract
 
 
 def test_tools_enforce_uniqueness_rejection_and_stored_coordinates(graph, candidates):
     tools = MatchTools(graph, candidates)
+    assert not tools.call("propose_match", json.dumps({"sketch_id": "p1", "candidate_id": "synthetic:0", "evidence": "unseen"}))["ok"]
     tools.call("search_candidates", json.dumps({"query": "Sample"}))
     ok = lambda sid, cid: tools.call("propose_match", json.dumps({"sketch_id": sid, "candidate_id": cid, "evidence": "e"}))["ok"]
     assert ok("p1", "synthetic:0") and not ok("p2", "synthetic:0")  # one place cannot serve two landmarks
@@ -199,3 +200,101 @@ def test_meta_provider_wire_shape_and_telemetry(tmp_path, graph):
     replay = MetaProvider("", transport=Transport(mode="replay", recordings=tmp_path))
     assert [c.name for c in replay.agent_turn("SYSTEM", transcript, TOOL_SPECS).tool_calls] == ["search_candidates", "finish"]
     assert len(seen) == 1
+
+
+def batch_decide():
+    return turn(("propose_matches", {"matches": [json.loads(c.arguments) for c in decide().tool_calls[:-1]]}), ("finish", {}))
+
+
+def test_upfront_shortlists_allow_batch_commit_without_search(tmp_path, providers, image_bytes, area):
+    meta, geography = providers
+    meta, run, trace = run_with(tmp_path, meta.graph, geography, [batch_decide()], image_bytes, area)
+    assert run["agent"]["status"] == "completed"
+    assert run["agent"]["steps"] == 1 and run["agent"]["tool_calls"] == 2
+    assert [p["candidate_id"] for p in run["proposals"]] == ["synthetic:0", "synthetic:1", "synthetic:2", None]
+    context = json.loads(meta.transcripts[0][-1]["content"])
+    candidate = context["candidate_shortlists"]["p1"][0]
+    assert candidate["id"] == "synthetic:0" and candidate["type"] == "library"
+    assert candidate["distance_after_fit_m"] is None
+
+
+def test_searching_model_finalizes_on_last_turn_with_reserved_capacity(graph, candidates):
+    contexts = []
+    class Provider:
+        def agent_turn(self, system, transcript, tools):
+            context = json.loads(transcript[-1]["content"])
+            contexts.append(context)
+            if context["turns_left"] == 1:
+                assert "Finalize every undecided landmark" in context["instruction"]
+                return batch_decide()
+            return turn(*[("search_candidates", {"query": "Sample"})] * 16)
+    outcome = MatchAgent(Provider(), MatchTools(graph, candidates), settings=Settings(),
+                         verify=lambda rows: {"status": "pass", "outliers": []}, charge=lambda: None,
+                         calls_left=lambda: 99, record=lambda s: None, model="mock").run(graph)
+    assert outcome.status == "completed" and outcome.steps == 8 and outcome.tool_calls == 64
+    assert [c["turns_left"] for c in contexts] == list(range(8, 0, -1))
+    assert "Finalize every undecided landmark" in contexts[-2]["instruction"]
+    assert sum(p["candidate_id"] is not None for p in outcome.proposals) == 3
+
+
+def test_shortlist_distances_use_current_fit(graph, candidates, area):
+    tools = MatchTools(graph, candidates, area=area.model_dump(), image={"width": 800, "height": 400})
+    tools.shortlists()
+    for call in decide().tool_calls[:-1]:
+        assert tools.call(call.name, call.arguments)["ok"]
+    shortlists = tools.shortlists()
+    for sid, cid in [("p1", "synthetic:0"), ("p2", "synthetic:1"), ("p3", "synthetic:2")]:
+        assert next(c for c in shortlists[sid] if c["id"] == cid)["distance_after_fit_m"] == 0
+
+
+@pytest.mark.parametrize("bad", [
+    {"finish_reason": "length", "message": {}},
+    {"finish_reason": "tool_calls", "message": {"tool_calls": []}},
+    {"finish_reason": "tool_calls", "message": {"tool_calls": [{"id": "a", "function": {"name": "finish", "arguments": "{"}}]}},
+])
+def test_incomplete_turn_retries_once_and_charges_budget(bad):
+    from app.llm import call_budget
+    requests, charges = [], []
+    def respond(request):
+        requests.append(json.loads(request.content))
+        choice = bad if len(requests) == 1 else {"finish_reason": "tool_calls", "message": {
+            "tool_calls": [{"id": "a", "function": {"name": "finish", "arguments": "{}"}}]}}
+        return httpx.Response(200, json={"choices": [choice], "usage": {"completion_tokens": 10}})
+    provider = MetaProvider("test-placeholder", client=httpx.Client(transport=httpx.MockTransport(respond)))
+    with call_budget(lambda: charges.append(1)):
+        result = provider.agent_turn("system", [], TOOL_SPECS)
+    assert len(charges) == 1 and [r["max_completion_tokens"] for r in requests] == [4096, 8192]
+    assert all(r["tool_choice"] == "auto" for r in requests)
+    assert result.tool_calls[0].name == "finish" and result.telemetry["model_calls"] == 2
+    assert result.telemetry["usage"]["completion_tokens"] == 20
+
+
+def test_incomplete_retry_stops_at_one_retry_or_call_cap():
+    from app.llm import call_budget
+    requests = []
+    def respond(request):
+        requests.append(1)
+        return httpx.Response(200, json={"choices": [{"finish_reason": "length", "message": {}}]})
+    provider = MetaProvider("test-placeholder", client=httpx.Client(transport=httpx.MockTransport(respond)))
+    with pytest.raises(ProviderError, match="after one retry"):
+        provider.agent_turn("system", [], TOOL_SPECS)
+    assert len(requests) == 2
+    def exhausted():
+        raise ProviderError("call cap")
+    with call_budget(exhausted), pytest.raises(ProviderError, match="call cap"):
+        provider.agent_turn("system", [], TOOL_SPECS)
+    assert len(requests) == 3  # retry never sent
+
+
+def test_verifier_rejection_reason_is_stored(tmp_path, providers, image_bytes, area):
+    meta, geography = providers
+    graph = meta.graph.model_copy(deep=True)
+    for p in graph.landmarks:
+        p.y = 0.5  # collinear: deterministic fit must reject
+    _, run, trace = run_with(tmp_path, graph, geography, [batch_decide(),
+        turn(("propose_matches", {"matches": [{"sketch_id": p.id, "candidate_id": None, "evidence": "Fit rejected"}
+                                               for p in graph.landmarks]}), ("finish", {}))], image_bytes, area)
+    rejection = run["agent"]["verifier_rejections"][0]
+    assert rejection["reason"] and rejection["status"] == "rejected"
+    assert any(rejection["reason"] in s["output_summary"] for s in trace["steps"] if s["agent"] == "Verifier")
+    assert all(p["candidate_id"] is None for p in run["proposals"])

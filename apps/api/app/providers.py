@@ -181,25 +181,49 @@ class MetaProvider:
             raise ProviderError("Set MODEL_API_KEY in project/.env before starting a live run")
         body = {**self._base(), "messages": self.wire_messages(system, transcript),
                 "tools": self.wire_tools(tools), "tool_choice": "auto"}
-        response, info = self.transport.post(body)
-        try:
-            choice = response["choices"][0]
-            message = choice["message"]
-            if choice.get("finish_reason") == "length" or message.get("refusal"):
-                raise ValueError("Incomplete or refused response")
-            calls = []
-            for i, raw in enumerate(message.get("tool_calls") or []):
-                function = raw.get("function") or {}
-                arguments = function.get("arguments", "")
-                calls.append(ToolCall(id=str(raw.get("id") or f"call_{i}"), name=str(function.get("name") or ""),
-                                      arguments=arguments if isinstance(arguments, str) else json.dumps(arguments)))
-            content = message.get("content")
-        except (ValueError, KeyError, IndexError, TypeError, AttributeError):
-            raise ProviderError("Model turn was incomplete, refused or had an unexpected tool-call shape; review and retry") from None
+        usages, infos = [], []
+        for attempt in range(2):
+            if attempt:
+                charge_extra_call()
+                body = {**body, "max_completion_tokens": max(8192, self.max_completion_tokens * 2)}
+            response, info = self.transport.post(body)
+            usages.append(response.get("usage"))
+            infos.append(info)
+            try:
+                choice = response["choices"][0]
+                message = choice["message"]
+                if message.get("refusal"):
+                    raise ProviderError("Model turn was refused; review and retry")
+                if choice.get("finish_reason") == "length":
+                    raise ValueError("Incomplete response")
+                raw_calls = message.get("tool_calls")
+                if not isinstance(raw_calls, list) or not raw_calls:
+                    raise ValueError("Empty tool calls")
+                calls, seen_ids = [], set()
+                for raw in raw_calls:
+                    function = raw["function"]
+                    call_id, name = raw["id"], function["name"]
+                    if (not isinstance(call_id, str) or not call_id.strip() or call_id in seen_ids
+                            or not isinstance(name, str) or not name.strip()):
+                        raise ValueError("Invalid tool call")
+                    seen_ids.add(call_id)
+                    arguments = function["arguments"]
+                    parsed = json.loads(arguments) if isinstance(arguments, str) else arguments
+                    if not isinstance(parsed, dict):
+                        raise ValueError("Invalid tool arguments")
+                    calls.append(ToolCall(call_id, name, arguments if isinstance(arguments, str) else json.dumps(arguments)))
+                content = message.get("content")
+                break
+            except (ValueError, KeyError, IndexError, TypeError, AttributeError):
+                if attempt:
+                    raise ProviderError("Model turn was incomplete or had invalid tool calls after one retry; review and retry") from None
         return AgentTurn(content if isinstance(content, str) else None, calls, {
             "provider": self.name, "requested_model": self.model, "returned_model": response.get("model"),
-            "response_id": response.get("id"), "usage": response.get("usage"), "latency_ms": info["latency_ms"],
-            "retries": info.get("retries", 0), "replayed": info["replayed"], "prompt_version": "match-agent-v1"})
+            "response_id": response.get("id"), "usage": sum_usage(usages),
+            "latency_ms": sum(i["latency_ms"] or 0 for i in infos),
+            "retries": sum(i.get("retries", 0) for i in infos), "replayed": all(i["replayed"] for i in infos),
+            "repaired": bool(attempt), "model_calls": len(infos) + sum(i.get("retries", 0) for i in infos),
+            "prompt_version": "match-agent-v1"})
 
     def match(self, graph, shortlist, hint=None):
         payload = {"sketch": graph.model_dump(), "allowed_candidates_by_sketch_id": shortlist}

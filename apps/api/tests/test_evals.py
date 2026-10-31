@@ -91,6 +91,7 @@ def test_ground_truth_is_never_sent_to_the_model(tmp_path, graph, candidates, ar
     manifest = write_manifest(tmp_path / "SENTINEL-MANIFEST.jsonl", entry)
     sent, queue = [], []
     def call(name, **args):
+        queue.append(name)  # unique tool-call IDs, as required by the provider wire format
         return {"id": f"c{len(queue)}{name}{len(args)}", "type": "function", "function": {"name": name, "arguments": json.dumps(args)}}
     turns = [[call("search_candidates", query=q) for q in ("Sample Library", "Sample School", "Sample Park")],
              [call("propose_match", sketch_id=f"p{i + 1}", candidate_id=f"synthetic:{i}" if i < 3 else None, evidence="label match") for i in range(4)] + [call("finish")]]

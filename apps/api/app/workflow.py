@@ -152,6 +152,8 @@ class Workflow:
             result = verify(graph.model_dump(), matches, run["candidates"], run["area"], run["image"])
             held = result.get("held_out_error_m")
             out = f'{result["status"]}; outliers={result["outliers"]}' + (f'; held-out median {held["median"]} m' if held else "")
+            if result.get("reason"):
+                out += "; reason=" + result["reason"]
             return result, out, {"pass": "ok", "rejected": "rejected"}.get(result["status"], "skipped")
         n = sum(1 for m in matches if m["candidate_id"])
         return self._step(run_id, "Verifier", "Deterministic geometry check (similarity fit, outliers, held-out error)",
@@ -159,7 +161,7 @@ class Workflow:
 
     def _agent_match(self, run_id, run, graph, history, model):
         """Tool-calling loop: the model picks deterministic tools, the Verifier decides, one recovery."""
-        tools = MatchTools(graph, [Candidate.model_validate(c) for c in run["candidates"]])
+        tools = MatchTools(graph, [Candidate.model_validate(c) for c in run["candidates"]], area=run["area"], image=run["image"])
         charge = lambda: self.count_call(run_id)
         agent = MatchAgent(self.meta, tools, settings=self.settings, model=model, charge=charge,
                            verify=lambda rows: self._verify_step(run_id, run, graph, rows, "geometry check"),

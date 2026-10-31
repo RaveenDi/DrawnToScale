@@ -26,10 +26,12 @@ class Outcome:
     tool_calls: int
     recovered: bool
     telemetry: list = field(default_factory=list)
+    verifier_rejections: list = field(default_factory=list)
 
     def summary(self):
         return {"status": self.status, "detail": self.detail, "steps": self.steps, "tool_calls": self.tool_calls,
-                "recovered": self.recovered, "abstained": [p["sketch_id"] for p in self.proposals if not p["candidate_id"]]}
+                "recovered": self.recovered, "verifier_rejections": self.verifier_rejections,
+                "abstained": [p["sketch_id"] for p in self.proposals if not p["candidate_id"]]}
 
 
 def clip(value, n=160):
@@ -57,6 +59,13 @@ class MatchAgent:
         calls_left() -> remaining model calls for this run; record(step) appends a trace step."""
         self.provider, self.tools, self.settings = provider, tools, settings
         self.verify, self.charge, self.calls_left, self.record, self.model = verify, charge, calls_left, record, model
+        self.verifier_rejections = []
+
+    def _verify(self, rows):
+        verdict = self.verify(rows)
+        if verdict["status"] == "rejected":
+            self.verifier_rejections.append(verdict)
+        return verdict
 
     def run(self, graph) -> Outcome:
         s, t = self.settings, self.tools
@@ -73,6 +82,15 @@ class MatchAgent:
             if self.calls_left() <= 0:
                 status, detail = "partial_call_cap", f"Model-call cap ({s.max_model_calls}) for this run reached; undecided landmarks abstain."
                 break
+            turns_left = min(s.max_steps - steps, self.calls_left())
+            transcript.append({"role": "user", "content": json.dumps({
+                "turns_left": turns_left, "undecided": t.undecided,
+                "tool_calls_left": s.max_tool_calls - tool_calls,
+                "candidate_shortlists": t.shortlists(),
+                "fit_note": "Distances use a provisional fit of proposed anchors, not independent accuracy; null means no usable fit.",
+                "instruction": NUDGE + (" Finalize every undecided landmark now: decide or abstain with a reason. "
+                    "Use propose_matches to commit them together, then finish; do not spend remaining turns searching."
+                    if turns_left <= 2 else " Use the supplied shortlists directly; commit several decisions per turn.")}, ensure_ascii=False)})
             self.charge()
             started = time.monotonic()
             try:
@@ -103,6 +121,9 @@ class MatchAgent:
                     result = {"ok": False, "error": "finish() already succeeded this turn; remaining calls were skipped."}
                 elif i >= s.max_tool_calls_per_turn or tool_calls >= s.max_tool_calls:
                     result = {"ok": False, "error": "Tool-call limit reached; this call was skipped."}
+                elif call.name in {"search_candidates", "get_candidate", "distance_between"} and tool_calls >= s.max_tool_calls - 2:
+                    result = {"ok": False, "error": "Remaining tool budget is reserved for propose_matches and finish. Finalize every undecided landmark."}
+                    usable = True  # budget feedback is not malformed model output
                 else:
                     tool_calls += 1
                     begun = time.monotonic()
@@ -119,7 +140,7 @@ class MatchAgent:
                 break
             if t.finished:
                 rows = t.rows()
-                verdict = self.verify(rows)
+                verdict = self._verify(rows)
                 verified = self._signature(rows)
                 outliers = verdict["outliers"] if verdict["status"] == "rejected" else []
                 if outliers and not recovered:
@@ -128,6 +149,7 @@ class MatchAgent:
                     transcript.append({"role": "user", "content": json.dumps({"verifier_feedback": {
                         "instruction": "The deterministic geometry check rejected these picks. Re-decide ONLY these landmarks (rejected ids can no longer be proposed for them), then call finish() again.",
                         "rejected_candidate_ids_by_sketch_id": {x: t.rejected.get(x, []) for x in outliers},
+                        "reason": verdict.get("reason"),
                         "fit_residuals_m": verdict.get("fit_residuals_m"), "turns_left": s.max_steps - steps}}, ensure_ascii=False)})
                     outliers = []
                     continue
@@ -153,7 +175,7 @@ class MatchAgent:
                 text = "Verifier rejected the earlier pick and no replacement was chosen; abstaining." if t.rejected.get(sid) else reason
                 rows.append({"sketch_id": sid, "candidate_id": None, "evidence": text})
         if self._signature(rows) != verified:  # the loop ended early on a state the Verifier has not seen
-            verdict = self.verify(rows)
+            verdict = self._verify(rows)
             outliers = verdict["outliers"] if verdict["status"] == "rejected" else []
         for r in rows:
             if r["sketch_id"] in outliers:
@@ -165,7 +187,7 @@ class MatchAgent:
                          "duration_ms": 0, "status": "partial" if status.startswith(("partial", "stopped")) else "abstained"})
         elif outliers:
             detail = f"{len(outliers)} landmark(s) abstained: geometry check failed after the one recovery."
-        return Outcome(rows, status, detail, steps, tool_calls, recovered, telemetry)
+        return Outcome(rows, status, detail, steps, tool_calls, recovered, telemetry, self.verifier_rejections)
 
     def _turn_step(self, n, started, status, summary, raw, n_messages):
         duration = round((time.monotonic() - started) * 1000)
