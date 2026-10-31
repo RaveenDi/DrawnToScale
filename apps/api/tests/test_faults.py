@@ -128,3 +128,25 @@ def test_repair_cannot_exceed_the_run_model_call_budget(tmp_path, monkeypatch, i
         created = create_run(client, image_bytes, area)
         _, _, run = await_run(client, created)
     assert run["status"] == "failed" and "1-call model budget" in run["error"] and len(calls) == 1
+
+
+@pytest.mark.parametrize("cap", [1, 2, 3])
+@pytest.mark.parametrize("failure", [timeout, lambda: httpx.Response(429), lambda: httpx.Response(503)])
+def test_http_attempts_cannot_exceed_run_budget(tmp_path, monkeypatch, image_bytes, area, cap, failure):
+    monkeypatch.setenv("AGENT_MAX_MODEL_CALLS", str(cap))
+    p, calls = provider([failure() for _ in range(3)], [])
+    with TestClient(create_app(tmp_path, p, FakeGeography([]))) as client:
+        created = create_run(client, image_bytes, area)
+        _, _, run = await_run(client, created)
+    assert run["status"] == "failed"
+    assert run["model_calls"] == len(calls) == cap
+
+
+def test_repair_and_http_retries_share_budget(tmp_path, monkeypatch, image_bytes, area):
+    monkeypatch.setenv("AGENT_MAX_MODEL_CALLS", "3")
+    p, calls = provider([httpx.Response(503), bad(), httpx.Response(503), bad()], [])
+    with TestClient(create_app(tmp_path, p, FakeGeography([]))) as client:
+        created = create_run(client, image_bytes, area)
+        _, _, run = await_run(client, created)
+    assert run["status"] == "failed" and "3-call model budget" in run["error"]
+    assert run["model_calls"] == len(calls) == 3

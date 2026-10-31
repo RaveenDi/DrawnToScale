@@ -136,3 +136,98 @@ def test_score_outcomes_alignment_and_geographic_error():
     total = score.aggregate([s])
     assert total["match_accuracy"] == pytest.approx(1 / 4) and total["false_match_on_unknown"] == 1.0 and total["geo_error_m"]["n"] == 2
     assert total["truth_missing_from_candidates"] == 1  # "node/9" is not in the candidate pool
+
+
+def test_real_manifest_comments_and_all_five_cases(monkeypatch):
+    # Validate the public manifest without opening private sketch images.
+    monkeypatch.setattr(Path, "is_file", lambda self: True)
+    items = harness.load_manifest(ROOT / "evals" / "manifest.jsonl")
+    assert [(i["id"], i["split"]) for i in items] == [
+        ("s1", "dev"), ("s2", "dev"), ("s3", "dev"), ("s4", "heldout"), ("s5", "heldout")]
+
+
+@pytest.mark.parametrize("suffix", ["#2", " #2"])
+@pytest.mark.parametrize("picks", [[None, "osm:node/1"], ["osm:node/1", None]])
+def test_duplicate_labels_use_best_one_to_one_assignment(suffix, picks):
+    gt = {"Temple": "node/1", "temple" + suffix: None}
+    graph = {"landmarks": [{"id": str(i), "label": "temple"} for i in range(2)]}
+    proposals = [{"sketch_id": str(i), "candidate_id": pick} for i, pick in enumerate(picks)]
+    result = score.score_item(gt, graph, proposals, {})
+    assert result["extraction_hits"] == 2
+    assert result["correct"] == result["correct_abstain"] == 1
+    assert len({r["sketch_id"] for r in result["rows"]}) == 2
+
+
+@pytest.mark.parametrize("truth", [None, "node/1"])
+def test_duplicate_labels_do_not_reuse_one_extracted_landmark(truth):
+    result = score.score_item({"Bridge": truth, "Bridge #2": truth},
+                              {"landmarks": [{"id": "a", "label": "Bridge"}]},
+                              [{"sketch_id": "a", "candidate_id": score.canon(truth)}], {})
+    assert result["ground_truth"] == 2 and result["extraction_hits"] == 1
+    assert result["not_extracted"] == 1 and result["extraction_recall"] == 0.5
+
+
+@pytest.mark.parametrize("stage", ["extract", "retrieve", "match"])
+@pytest.mark.parametrize("safe", [False, True])
+def test_pipeline_failures_are_persisted_and_sanitized(tmp_path, providers, area, image_bytes, stage, safe):
+    from app.llm import ProviderError
+    from app.storage import Store
+    from app.workflow import Workflow
+    meta, geography = providers
+    def fail(*args, **kwargs):
+        raise ProviderError("Safe provider failure") if safe else RuntimeError("SENSITIVE_PAYLOAD")
+    setattr(geography if stage == "retrieve" else meta, stage, fail)
+    sketch = tmp_path / "sketch.png"
+    sketch.write_bytes(image_bytes)
+    store = Store(tmp_path / "data")
+    workflow = Workflow(store, meta, geography)
+    try:
+        run = harness.run_item(workflow, store, {"_image_path": sketch}, area)
+    finally:
+        workflow.close()
+    saved = Store(tmp_path / "data").get(run["id"])
+    assert saved == run and saved["status"] == "failed"
+    assert saved["events"][-1]["kind"] == "failed"
+    assert saved["error"] == ("Safe provider failure" if safe else "Unexpected pipeline error (RuntimeError)")
+    assert "SENSITIVE_PAYLOAD" not in json.dumps(saved)
+
+
+def test_eval_retry_attempts_respect_total_call_cap(tmp_path):
+    calls = []
+    def respond(request):
+        calls.append(request)
+        return httpx.Response(503)
+    transport = Transport("test", client=httpx.Client(transport=httpx.MockTransport(respond)), sleep=lambda _: None)
+    manifest = write_manifest(tmp_path / "m.jsonl", item(id="one"), item(id="two"))
+    report, _ = harness.evaluate("meta", manifest, "dev", max_calls=2, out_dir=tmp_path / "out",
+                                 data_dir=tmp_path / "data", meta=MetaProvider("test", transport=transport),
+                                 geography=FixtureGeography())
+    assert report["meta"]["calls_used"] == len(calls) == 2
+    assert report["meta"]["items_skipped_for_call_cap"] == ["two"]
+    assert report["items"][0]["run_status"] == "failed"
+
+
+@pytest.mark.parametrize("override", [None, "environment-model"])
+def test_replay_loads_nonsecret_model_settings_and_matches_recording(tmp_path, monkeypatch, graph, image_bytes, override):
+    from app.config import Settings
+    from test_replay import reply
+    monkeypatch.setattr(harness, "ROOT", tmp_path)
+    monkeypatch.delenv("META_MODEL", raising=False)
+    monkeypatch.delenv("META_REASONING_EFFORT", raising=False)
+    if override:
+        monkeypatch.setenv("META_MODEL", override)
+    # Synthetic config only; never read the project's .env or load credentials in replay.
+    (tmp_path / ".env").write_text('META_MODEL="recorded-model"\nMETA_REASONING_EFFORT=low\n', encoding="utf-8")
+    import dotenv
+    def forbidden(*args, **kwargs):
+        pytest.fail("Replay must not load credentials")
+    monkeypatch.setattr(dotenv, "load_dotenv", forbidden)
+    recording = tmp_path / "rec"
+    with httpx.Client(transport=httpx.MockTransport(lambda request: reply(graph))) as client:
+        live = MetaProvider("test", override or "recorded-model", reasoning_effort="low",
+                            transport=Transport("test", client=client, recordings=recording))
+        expected, _ = live.extract(image_bytes, "")
+    replay, geography = harness.build_providers("replay", recording, Settings())
+    actual, telemetry = replay.extract(image_bytes, "")
+    assert actual == expected and telemetry["replayed"]
+    assert replay.key == "" and replay.client is None and geography.offline

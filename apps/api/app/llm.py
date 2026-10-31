@@ -69,7 +69,7 @@ class AgentTurn:
 
 
 # Run-level model-call budget. The loop/workflow charges one call per logical request itself;
-# transports charge only the *extra* calls they make internally (JSON repair).
+# providers/transports charge extra attempts internally (JSON repair and HTTP retries).
 _budget = ContextVar("model_call_budget", default=None)
 
 
@@ -179,6 +179,8 @@ class Transport:
             raise ProviderError("Set MODEL_API_KEY in project/.env before starting a live run")
         started = time.monotonic()
         for attempt in range(self.retries + 1):
+            if attempt:
+                charge_extra_call()  # first attempt was charged by the workflow; charge retries before sending
             try:
                 response = read_json_response(self.client, self.url, limit=2 * 1024 * 1024,
                                               headers={"Authorization": "Bearer " + self.key}, json=body)

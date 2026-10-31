@@ -10,6 +10,7 @@ import argparse
 from dataclasses import replace
 from datetime import datetime, timezone
 import hashlib
+from io import StringIO
 import json
 import os
 from pathlib import Path
@@ -77,13 +78,31 @@ def resolve_area(spec):
     return Area.model_validate(json.loads((ROOT / "evals" / "areas" / f"{spec}.json").read_text(encoding="utf-8"))["area"])
 
 
+def request_settings():
+    """Load only non-secret request settings; never parse keys or interpolate secrets."""
+    from dotenv import dotenv_values
+    names = {"META_MODEL", "META_REASONING_EFFORT"}
+    lines = []
+    path = ROOT / ".env"
+    if path.is_file():
+        with path.open(encoding="utf-8") as source:
+            for line in source:
+                name = line.split("=", 1)[0].strip().removeprefix("export ").strip()
+                if name in names:
+                    lines.append(line)
+    values = dotenv_values(stream=StringIO("".join(lines)), interpolate=False)
+    return {name: os.environ.get(name, values.get(name) or "") for name in names}
+
+
 def build_providers(kind, recordings, settings):
     if kind == "mock":
         return MockProvider(), FixtureGeography()
     cache = ROOT / "private" / "geography-cache"
-    effort = os.getenv("META_REASONING_EFFORT", "").strip() or None  # part of the request, hence of the replay key
+    config = request_settings()
+    model = config["META_MODEL"].strip() or "muse-spark-1.3"
+    effort = config["META_REASONING_EFFORT"].strip() or None
     if kind == "replay":
-        return (MetaProvider("", transport=Transport(mode="replay", recordings=recordings), reasoning_effort=effort), OSMProvider(cache, offline=True))
+        return (MetaProvider("", model, transport=Transport(mode="replay", recordings=recordings), reasoning_effort=effort), OSMProvider(cache, offline=True))
     from dotenv import load_dotenv
     load_dotenv(ROOT / ".env", override=False)
     key = os.getenv("MODEL_API_KEY", "").strip()
@@ -91,7 +110,7 @@ def build_providers(kind, recordings, settings):
         raise SystemExit("--provider meta needs MODEL_API_KEY in .env (live, billed calls).")
     transport = Transport(key, recordings=recordings, retries=settings.http_retries, backoff_s=settings.backoff_s,
                           max_wait_s=settings.max_retry_wait_s)
-    return MetaProvider(key, os.getenv("META_MODEL", "muse-spark-1.3"), transport=transport, reasoning_effort=effort), OSMProvider(cache)
+    return MetaProvider(key, model, transport=transport, reasoning_effort=effort), OSMProvider(cache)
 
 
 def run_item(workflow, store, item, area):
@@ -107,10 +126,9 @@ def run_item(workflow, store, item, area):
         error = str(exc)
     except Exception as exc:  # reported per item; the class name is safe, the message may not be
         error = f"Unexpected pipeline error ({type(exc).__name__})"
-    run = store.get(run["id"])
-    if error and not run.get("error"):
-        run["error"] = error
-    return run
+    if error:
+        workflow.stage(run["id"], "failed", error=error)
+    return store.get(run["id"])
 
 
 def item_result(item, run):

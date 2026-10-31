@@ -1,6 +1,7 @@
 """Pure scoring for the evaluation harness. Ground truth only ever enters here, after a run finished;
 it is never passed to a provider, workflow or prompt."""
 from difflib import SequenceMatcher
+import re
 from statistics import mean, median
 
 from pyproj import Geod
@@ -16,12 +17,16 @@ def canon(osm_id):
     return None if osm_id is None else (osm_id if osm_id.startswith("osm:") else "osm:" + osm_id)
 
 
+def label_name(label):
+    return normalized_name(re.sub(r"\s*#2$", "", label))
+
+
 def align_labels(gt_labels, extracted):
     """Greedy one-to-one alignment of ground-truth labels to extracted landmarks by label similarity."""
     pairs = []
     for g, label in enumerate(gt_labels):
         for e, mark in enumerate(extracted):
-            a, b = normalized_name(label), normalized_name(mark["label"])
+            a, b = label_name(label), normalized_name(mark["label"])
             ratio = 1.0 if a == b else SequenceMatcher(None, a, b).ratio()
             if ratio >= LABEL_MATCH:
                 pairs.append((ratio, g, e))
@@ -31,6 +36,30 @@ def align_labels(gt_labels, extracted):
             used_g.add(g), used_e.add(e)
             found[gt_labels[g]] = extracted[e]["id"]
     return found
+
+
+def assign_duplicates(gt, found, proposed):
+    """Maximize correct outcomes within indistinguishable label groups, retaining one-to-one hits.
+
+    Pair equal truth/proposal IDs (including abstentions) first, then assign remaining hits.
+    These disjoint equality groups give the best assignment without factorial enumeration.
+    """
+    groups = {}
+    for label in gt:
+        groups.setdefault(label_name(label), []).append(label)
+    for labels in groups.values():
+        if len(labels) < 2:
+            continue
+        available = [found.pop(label) for label in labels if label in found]
+        remaining = []
+        for label in labels:
+            match = next((sid for sid in available if proposed.get(sid) == gt[label]), None)
+            if match is None:
+                remaining.append(label)
+            else:
+                found[label] = match
+                available.remove(match)
+        found.update(zip(remaining, available))
 
 
 def distance_m(candidates, a, b):
@@ -46,6 +75,7 @@ def score_item(ground_truth, graph, proposals, candidates):
     gt = {label: canon(osm) for label, osm in ground_truth.items()}
     found = align_labels(list(gt), extracted)
     proposed = {p["sketch_id"]: p["candidate_id"] for p in proposals}
+    assign_duplicates(gt, found, proposed)
     rows = []
     for label, truth in gt.items():
         sketch_id = found.get(label)
