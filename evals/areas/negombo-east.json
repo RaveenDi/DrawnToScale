@@ -1,0 +1,15 @@
+{
+  "name": "East of central Negombo (outside negombo-central).",
+  "area": {
+    "west": 79.84,
+    "south": 7.198,
+    "east": 79.862,
+    "north": 7.218
+  },
+  "selection": "Box drawn around an owner sketch's area on 2026-10-31; holds only the bounding box, no answers.",
+  "location_source": "https://www.openstreetmap.org",
+  "location_source_checked": "2026-10-31",
+  "attribution": "© OpenStreetMap contributors",
+  "license_url": "https://www.openstreetmap.org/copyright",
+  "coverage_status": "2026-10-31: inside a 933-feature wider Negombo retrieval; coverage not manually inspected."
+}
